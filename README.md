@@ -75,6 +75,7 @@ I recomend update pytorch version: 2.8.0+cu129.
 1. PyTorch install: `pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu129`
 2. CUDA manual download and install: https://developer.nvidia.com/cuda-12-9-0-download-archive?target_os=Windows&target_arch=x86_64&target_version=11&target_type=exe_local
 3. Install `SageAttention 2.2.0`, manualy `https://github.com/thu-ml/SageAttention` or use script `scripts/check_sageattention.bat`. The installation takes a few minutes, wait for the installation to finish.
+p.s.: To work, you definitely need to install `SageAttention v.2.2.0`, `version 1.0.6` is not suitable for pipeline.
 
 Next:
 1. Clone or download this repo into `ComfyUI/custom_nodes/`
