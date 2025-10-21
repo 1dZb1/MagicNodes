@@ -40,8 +40,8 @@ jobs:
           git lfs track "*.jpg" "*.jpeg" "*.png"
           git add .gitattributes || true
           git commit -m "ci(hf): track images via LFS (mirror-only)" || true
-          # Rewrite reachable history for these patterns
-          git lfs migrate import --yes --include="*.jpg,*.jpeg,*.png"
+          # Rewrite history for all refs so no plain binaries remain in the mirror
+          git lfs migrate import --everything --yes --include="*.jpg,*.jpeg,*.png,*.webp,*.gif,*.bmp,*.tif,*.tiff"
 
       - name: Push to HF mirror
         env:
