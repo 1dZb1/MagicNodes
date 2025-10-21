@@ -158,7 +158,7 @@ if($shadow){ Write-Warning "Local file shadows package: $shadow"; if(Ask-YesNo "
 }
 
 $needInstall = $false
-$wantSA3 = $false  # SA3 временно отключён
+$wantSA3 = $false  # SA3 disabled now
 # Detect Windows and mark SA3 unsupported for now
 $isWindows = ($env:OS -eq 'Windows_NT')
 # Check if SA3 already present

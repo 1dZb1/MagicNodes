@@ -54,7 +54,7 @@ Provide `reference_image` and `clip_vision` to preserve global form while refini
 - Post passes: `IntelligentDetailStabilizer`, optional mild sharpen
 
 ## Related
-- QSilk (micrograin stabilizer + AQClip): a lightweight latent‑space regularizer that suppresses rare activation tails while preserving micro‑texture. Works plug‑and‑play inside CADE 2.5 and synergizes with ZeResFDG by allowing slightly higher effective CFG without speckle. See preprint draft in `Arxiv_QSilk/` (source: [Arxiv_QSilk/main_qsilk.tex](../../Arxiv_QSilk/main_qsilk.tex)). Replace with arXiv link when available.
+- QSilk (micrograin stabilizer + AQClip): a lightweight latent‑space regularizer that suppresses rare activation tails while preserving micro‑texture. Works plug‑and‑play inside CADE 2.5 and synergizes with ZeResFDG by allowing slightly higher effective CFG without speckle.
 
 ## Tips
 - Keep `vae` consistent across passes; CADE re‑encodes when scale changes.
