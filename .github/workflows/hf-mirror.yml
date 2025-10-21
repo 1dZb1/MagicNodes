@@ -32,6 +32,17 @@ jobs:
           git lfs checkout || true
           echo "LFS files present:" && git lfs ls-files || true
 
+      - name: Track image assets via LFS (mirror-only) and rewrite history
+        run: |
+          # Hugging Face requires binary assets (jpg/png) to be stored via LFS.
+          # We rewrite history locally on the runner so GitHub history remains intact,
+          # but the mirror on HF receives LFS pointers.
+          git lfs track "*.jpg" "*.jpeg" "*.png"
+          git add .gitattributes || true
+          git commit -m "ci(hf): track images via LFS (mirror-only)" || true
+          # Rewrite reachable history for these patterns
+          git lfs migrate import --yes --include="*.jpg,*.jpeg,*.png"
+
       - name: Push to HF mirror
         env:
           HF_USERNAME: ${{ secrets.HF_USERNAME }}
