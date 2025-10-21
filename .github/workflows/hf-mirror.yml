@@ -13,16 +13,24 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout (full history)
+      - name: Checkout (full history + LFS)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: false
+          lfs: true
 
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Ensure LFS objects are present
+        run: |
+          git lfs install
+          # Fetch any missing LFS content referenced by HEAD
+          git lfs fetch --all || true
+          git lfs checkout || true
+          echo "LFS files present:" && git lfs ls-files || true
 
       - name: Push to HF mirror
         env:
@@ -38,4 +46,3 @@ jobs:
           git remote add hf "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/${HF_USERNAME}/${HF_REPO}.git" 2>/dev/null || true
           # Mirror current branch to HF main
           git push --force --prune hf HEAD:main
-
