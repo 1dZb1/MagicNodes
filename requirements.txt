@@ -1,0 +1,21 @@
+# Core dependencies for MagicNodes (beyond vanilla ComfyUI)
+
+# Text/image models (CLIPSeg in CADE)
+transformers>=4.36,<5
+
+# ONNX runtime removed (detectors disabled)
+
+# Computer vision / image IO
+opencv-contrib-python>=4.8,<5
+Pillow>=9.5,<11
+
+# Math/filters (IDS uses SciPy when available)
+scipy>=1.10
+
+# Old Attention acceleration (SageAttention); code falls back gracefully if missing
+# sageattention
+
+# Optional extras (uncomment if needed)
+
+# Depth-Anything auxiliary fallback (not required when using the vendored implementation):
+# controlnet-aux>=0.0.8

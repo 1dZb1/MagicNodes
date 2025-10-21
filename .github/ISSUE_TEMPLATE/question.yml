@@ -1,0 +1,20 @@
+name: "Question / Help"
+description: "Ask a question about usage, presets, or behavior"
+title: "[Q] <short summary>"
+labels: [question]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What do you want to understand or achieve?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Share your preset, node settings, or screenshot if helpful
+    validations:
+      required: false
+

@@ -1,0 +1,9 @@
+# Code owners for MagicNodes
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for the whole repository
+* @1dZb1
+
+# (Optional)
+# /docs/ @1dZb1
+# /mod/  @1dZb1

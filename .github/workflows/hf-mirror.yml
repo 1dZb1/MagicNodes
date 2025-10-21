@@ -1,0 +1,41 @@
+name: Mirror to Hugging Face
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: hf-mirror-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: false
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Push to HF mirror
+        env:
+          HF_USERNAME: ${{ secrets.HF_USERNAME }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_REPO: MagicNodes
+        run: |
+          if [ -z "${HF_USERNAME}" ] || [ -z "${HF_TOKEN}" ]; then
+            echo "HF secrets are missing. Set HF_USERNAME and HF_TOKEN in repo secrets." >&2
+            exit 1
+          fi
+          git lfs install || true
+          git remote add hf "https://${HF_USERNAME}:${HF_TOKEN}@huggingface.co/${HF_USERNAME}/${HF_REPO}.git" 2>/dev/null || true
+          # Mirror current branch to HF main
+          git push --force --prune hf HEAD:main
+

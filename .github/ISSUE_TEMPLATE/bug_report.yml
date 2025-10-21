@@ -1,0 +1,67 @@
+name: "Bug report"
+description: "Something is broken or not working as expected"
+title: "[Bug] <short summary>"
+labels: [bug]
+body:
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre‑flight
+      description: Please confirm you checked these first
+      options:
+        - label: I searched existing issues and discussions
+          required: true
+        - label: I’m on the latest MagicNodes commit and preset files
+          required: false
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened? What did you expect instead?
+      placeholder: A clear and concise description of the issue
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps / workflow to reproduce the problem
+      placeholder: |
+        1. Preset/step/config used
+        2. Node settings (seed/steps/cfg/denoise/sampler)
+        3. What you observed
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS/GPU/driver and versions
+      placeholder: |
+        OS: Windows 11 / Linux
+        GPU: RTX 4090 (driver 560.xx)
+        Python: 3.10.x  |  PyTorch: 2.8.0+cu129
+        ComfyUI: <commit/date>
+        MagicNodes: <commit>
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: Paste relevant logs, stack traces, or attach screenshots
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Impact
+      options:
+        - Crash/blocks generation
+        - Wrong output/quality regression
+        - UI/Docs glitch
+        - Minor inconvenience
+    validations:
+      required: false
+

@@ -1,0 +1,35 @@
+﻿cff-version: 1.2.0
+message: If you use CADE 2.5 / MG_SuperSimple, please cite our preprints (ZeResFDG and QSilk).
+title: "MagicNodes: CADE 2.5 (ZeResFDG and QSilk)"
+authors:
+  - family-names: Rychkovskiy
+    given-names: Denis
+    alias: DZRobo
+version: preprint
+date-released: 2025-10-11
+repository-code: https://github.com/1dZb1/MagicNodes
+url: https://huggingface.co/DD32/MagicNodes
+
+preferred-citation:
+  type: article
+  title: CADE 2.5: ZeResFDG - Frequency-Decoupled, Rescaled and Zero-Projected Guidance for SD/SDXL Latent Diffusion Models
+  authors:
+    - family-names: Rychkovskiy
+      given-names: Denis
+  year: 2025
+  journal: arXiv
+  identifiers:
+    - type: url
+      value: https://arxiv.org/abs/2510.12954
+
+references:
+  - type: article
+    title: QSilk: Micrograin Stabilization and Adaptive Quantile Clipping for Detail-Friendly Latent Diffusion
+    authors:
+      - family-names: Rychkovskiy
+        given-names: Denis
+    year: 2025
+    journal: arXiv
+    identifiers:
+      - type: url
+        value: https://arxiv.org/abs/2510.15761
