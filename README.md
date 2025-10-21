@@ -17,33 +17,32 @@ Our pipeline runs through several purposeful passes: early steps assemble global
 Please note that the SDXL architecture itself has limitations and the result depends on the success of the seed, the purity of your prompt and the quality of your model+LoRA.
 
 Draw
-<div align="center">
-  <img src="assets/Anime1.jpg" alt="Anime full" width="39%" />
-  <img src="assets/Anime1_crop.jpg" alt="Anime crop" width="39%" />
-  
-</div>
+
+| | |
+|:--:|:--:|
+| <img src="assets/Anime1.jpg" alt="Anime full" width="400"/> | <img src="assets/Anime1_crop.jpg" alt="Anime crop" width="400"/> |
 
 Photo Portrait
-<div align="center">
-  <img src="assets/PhotoPortrait1.jpg" alt="Photo A" width="39%" />
-  <img src="assets/PhotoPortrait1_crop1.jpg" alt="Photo B" width="39%" />
-</div>
-<div align="center">
-  <img src="assets/PhotoPortrait1_crop2.jpg" alt="Photo C" width="39%" />
-  <img src="assets/PhotoPortrait1_crop3.jpg" alt="Photo D" width="39%" />
-</div>
+
+| | |
+|:--:|:--:|
+| <img src="assets/PhotoPortrait1.jpg" alt="Photo A" width="400"/> | <img src="assets/PhotoPortrait1_crop1.jpg" alt="Photo B" width="400"/> |
+
+| | |
+|:--:|:--:|
+| <img src="assets/PhotoPortrait1_crop2.jpg" alt="Photo C" width="400"/> | <img src="assets/PhotoPortrait1_crop3.jpg" alt="Photo D" width="400"/> |
 
 Photo Cup
-<div align="center">
-  <img src="assets/PhotoCup1.jpg" alt="Photo A" width="39%" />
-  <img src="assets/PhotoCup1_crop.jpg" alt="Photo B" width="39%" />
-</div>
+
+| | |
+|:--:|:--:|
+| <img src="assets/PhotoCup1.jpg" alt="Photo A" width="400"/> | <img src="assets/PhotoCup1_crop.jpg" alt="Photo B" width="400"/> |
 
 Photo Dog
-<div align="center">
-  <img src="assets/Dog1_crop_ours_CADE25_QSilk.jpg" alt="Photo A" width="39%" />
-  <img src="assets/Dog1_ours_CADE25_QSilk.jpg" alt="Photo B" width="39%" />
-</div>
+
+| | |
+|:--:|:--:|
+| <img src="assets/Dog1_crop_ours_CADE25_QSilk.jpg" alt="Photo A" width="400"/> | <img src="assets/Dog1_ours_CADE25_QSilk.jpg" alt="Photo B" width="400"/> |
 
 ---
 
