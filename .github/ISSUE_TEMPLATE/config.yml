@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Q&A and ideas (Discussions)
+    url: https://github.com/1dZb1/MagicNodes/discussions
+    about: Ask questions and share ideas in Discussions
+  - name: Hugging Face page
+    url: https://huggingface.co/DD32/MagicNodes
+    about: Releases and mirrors on HF

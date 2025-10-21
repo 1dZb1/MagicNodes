@@ -1,0 +1,39 @@
+name: "Feature request"
+description: "Request an enhancement or new capability"
+title: "[Feat] <short summary>"
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What use‑case does this solve? Why is it valuable?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: API/UI/UX draft, presets, examples
+      placeholder: Describe the change and how it would work
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or different approaches
+    validations:
+      required: false
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: Easy nodes / presets
+        - label: Hard nodes / advanced params
+        - label: Docs / examples / workflows
+        - label: Performance / memory
+    validations:
+      required: false
+

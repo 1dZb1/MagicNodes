@@ -1,0 +1,35 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual envs / tooling
+.venv/
+venv/
+.env
+.env.*
+.idea/
+.vscode/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Build/output/temp
+dist/
+build/
+out/
+*.log
+*.tmp
+temp/
+temp_patch.diff
+
+# NOTE: We intentionally keep model weights in repo via Git LFS.
+# If you prefer not to ship them, re-add ignores for models/** and weight extensions.
+
+# ComfyUI caches
+**/web/tmp/
+**/web/dist/
+
+# Node / front-end (if any submodules appear later)
+node_modules/
