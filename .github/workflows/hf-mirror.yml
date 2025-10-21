@@ -43,6 +43,34 @@ jobs:
           # Rewrite history for all refs so no plain binaries remain in the mirror
           git lfs migrate import --everything --yes --include="*.jpg,*.jpeg,*.png,*.webp,*.gif,*.bmp,*.tif,*.tiff"
 
+      - name: Inject HF metadata (mirror-only)
+        run: |
+          cat > README.hf.md << 'EOF'
+          ---
+          library_name: comfyui
+          repo_type: model
+          license: agpl-3.0
+          pretty_name: MagicNodes (CADE 2.5, QSilk)
+          pipeline_tag: text-to-image
+          tags:
+            - comfyui
+            - stable-diffusion
+            - sdxl
+            - pipeline
+            - magicnodes
+            - zeresfdg
+            - qsilk
+            - depth-anything
+            - render
+          homepage: https://github.com/1dZb1/MagicNodes
+          ---
+          EOF
+          printf "\n" >> README.hf.md
+          cat README.md >> README.hf.md
+          mv README.hf.md README.md
+          git add README.md || true
+          git commit -m "ci(hf): inject HF metadata" || true
+
       - name: Push to HF mirror
         env:
           HF_USERNAME: ${{ secrets.HF_USERNAME }}
