@@ -33,6 +33,9 @@ _CLIPSEG_PROC = None
 _CLIPSEG_DEV = "cpu"
 _CLIPSEG_FORCE_CPU = True  # pin CLIPSeg to CPU to avoid device drift
 
+# Cooperative cancel sentinel: set in callbacks when user interrupts
+_MG_CANCEL_REQUESTED = False
+
 # Per-iteration spatial guidance mask (B,1,H,W) in [0,1]; used by cfg_func when enabled
 # Kept for potential future use with non-ONNX masks (e.g., CLIPSeg/ControlFusion),
 # but not set by this node since ONNX paths are removed.
@@ -1540,7 +1543,16 @@ class ComfyAdaptiveDetailEnhancer25:
                 clipseg_enable = False
                 # Depth gate cache for micro-detail injection (reuse per resolution)
                 depth_gate_cache = {"size": None, "mask": None}
+                # early interruption check before starting the loop
+                try:
+                    model_management.throw_exception_if_processing_interrupted()
+                except Exception:
+                    # ensure finally-block cleanup runs and exception propagates
+                    raise
+
                 for i in range(iterations):
+                    # cooperative cancel at the start of each iteration
+                    model_management.throw_exception_if_processing_interrupted()
                     if i % 2 == 0:
                         clear_gpu_and_ram_cache()
 
@@ -1618,7 +1630,9 @@ class ComfyAdaptiveDetailEnhancer25:
                             batch_inds = current_latent.get("batch_index", None)
                             noise = _sample.prepare_noise(lat_img, int(iter_seed), batch_inds)
                             noise_mask = current_latent.get("noise_mask", None)
-                            callback = nodes.latent_preview.prepare_callback(sampler_model, int(current_steps))
+                            callback = _wrap_interruptible_callback(sampler_model, int(current_steps))
+                            # cooperative cancel just before entering sampler
+                            model_management.throw_exception_if_processing_interrupted()
                             disable_pbar = not _utils.PROGRESS_BAR_ENABLED
                             sampler_obj = _samplers.sampler_object(str(sampler_name))
                             samples = _sample.sample_custom(
@@ -1630,15 +1644,28 @@ class ComfyAdaptiveDetailEnhancer25:
                             current_latent = {**current_latent}
                             current_latent["samples"] = samples
                         except Exception as e:
+                            # Before any fallback, propagate user cancel if set
+                            try:
+                                model_management.throw_exception_if_processing_interrupted()
+                            except Exception:
+                                globals()["_MG_CANCEL_REQUESTED"] = False
+                                raise
+                            # Do not swallow user interruption; also check sentinel just in case
+                            if isinstance(e, model_management.InterruptProcessingException) or globals().get("_MG_CANCEL_REQUESTED", False):
+                                globals()["_MG_CANCEL_REQUESTED"] = False
+                                raise
                             # Fallback to original path if anything goes wrong
                             print(f"[CADE2.5][MGHybrid] fallback to common_ksampler due to: {e}")
-                            current_latent, = nodes.common_ksampler(
+                            current_latent, = _interruptible_ksampler(
                                 sampler_model, iter_seed, int(current_steps), current_cfg, sampler_name, _scheduler_names()[0],
                                 positive, negative, current_latent, denoise=current_denoise)
                     else:
-                        current_latent, = nodes.common_ksampler(
+                        current_latent, = _interruptible_ksampler(
                             sampler_model, iter_seed, int(current_steps), current_cfg, sampler_name, scheduler,
                             positive, negative, current_latent, denoise=current_denoise)
+
+                    # cooperative cancel right after sampling, before further heavy work
+                    model_management.throw_exception_if_processing_interrupted()
 
                     if bool(latent_compare):
                         latent_diff = current_latent["samples"] - prev_samples
@@ -1675,6 +1702,8 @@ class ComfyAdaptiveDetailEnhancer25:
                         pass
 
                     image = safe_decode(vae, current_latent)
+                    # allow cancel between sampling and post-decode logic
+                    model_management.throw_exception_if_processing_interrupted()
 
                     # Polish mode: keep global form (low frequencies) from reference while letting details refine
                     if bool(polish_enable) and (i >= int(polish_start_after)):
@@ -1833,6 +1862,17 @@ class ComfyAdaptiveDetailEnhancer25:
                 CURRENT_ONNX_MASK_BCHW = None
             except Exception:
                 pass
+            # reset cancel sentinel and cleanup cache
+            try:
+                globals()["_MG_CANCEL_REQUESTED"] = False
+                clear_gpu_and_ram_cache()
+            except Exception:
+                pass
+            # best-effort cleanup of GPU/CPU caches on cancel or error
+            try:
+                clear_gpu_and_ram_cache()
+            except Exception:
+                pass
 
         if apply_ids:
             image, = IntelligentDetailStabilizer().stabilize(image, ids_strength)
@@ -1862,3 +1902,33 @@ class ComfyAdaptiveDetailEnhancer25:
 
 
 
+def _wrap_interruptible_callback(model, steps):
+    base_cb = nodes.latent_preview.prepare_callback(model, int(steps))
+    def _cb(step, x0, x, total_steps):
+        # mark sentinel so outer layers avoid fallbacks on cancel
+        if model_management.processing_interrupted():
+            globals()["_MG_CANCEL_REQUESTED"] = True
+            raise model_management.InterruptProcessingException()
+        return base_cb(step, x0, x, total_steps)
+    return _cb
+
+def _interruptible_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                            positive, negative, latent, denoise=1.0):
+    lat_img = _sample.fix_empty_latent_channels(model, latent["samples"])
+    batch_inds = latent.get("batch_index", None)
+    noise = _sample.prepare_noise(lat_img, int(seed), batch_inds)
+    noise_mask = latent.get("noise_mask", None)
+    callback = _wrap_interruptible_callback(model, int(steps))
+    # cooperative cancel just before sampler entry
+    model_management.throw_exception_if_processing_interrupted()
+    disable_pbar = not _utils.PROGRESS_BAR_ENABLED
+    samples = _sample.sample(
+        model, noise, int(steps), float(cfg), str(sampler_name), str(scheduler),
+        positive, negative, lat_img,
+        denoise=float(denoise), disable_noise=False, start_step=None, last_step=None,
+        force_full_denoise=False, noise_mask=noise_mask, callback=callback,
+        disable_pbar=disable_pbar, seed=int(seed)
+    )
+    out = {**latent}
+    out["samples"] = samples
+    return (out,)

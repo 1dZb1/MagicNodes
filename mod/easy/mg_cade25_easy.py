@@ -283,7 +283,7 @@ def _clipseg_build_mask(image_bhwc: torch.Tensor,
                 cur = _encode_clip_image(image_bhwc, clip_vision, target_res=224)
                 dist = _clip_cosine_distance(cur, ref_embed)
                 if dist > float(ref_threshold):
-                    # up to +50% gain if СЃРёР»СЊРЅРѕ СѓРµС…Р°Р»Рё
+                    # up to +50% gain if distance exceeds the reference threshold
                     gate = 1.0 + min(0.5, (dist - float(ref_threshold)) * 4.0)
                     m = m * gate
             except Exception:
@@ -1710,7 +1710,7 @@ def _build_cf_edge_mask_from_step(image_bhwc: torch.Tensor, preset_step: str) ->
         edge_alpha = _safe_float(p.get('edge_alpha', 1.0), 1.0)
         # Treat blend_factor as extra gain for edges (depth is not mixed here)
         blend_factor = _safe_float(p.get('blend_factor', 0.02), 0.02)
-        # ControlNet multipliers section — use edge_strength_mul as an additional gain for edge mask
+        # ControlNet multipliers: use edge_strength_mul as an additional gain for the edge mask
         edge_strength_mul = _safe_float(p.get('edge_strength_mul', 1.0), 1.0)
 
         # Build edges with CF PyraCanny
@@ -1901,7 +1901,10 @@ class ComfyAdaptiveDetailEnhancer25:
                      clipseg_gain=1.0, clipseg_blend="fuse", clipseg_ref_gate=False, clipseg_ref_threshold=0.03,
                     polish_enable=False, polish_keep_low=0.4, polish_edge_lock=0.2, polish_sigma=1.0,
                    polish_start_after=1, polish_keep_low_ramp=0.2,
-                    preset_step="Step 1", custom_override=False):
+                     preset_step="Step 1", custom_override=False):
+        # Cooperative cancel before any heavy work
+        model_management.throw_exception_if_processing_interrupted()
+
         # Load base preset for the selected Step. When custom_override is True,
         # visible UI controls (top-level) are kept from UI; hidden ones still come from preset.
         try:
@@ -2016,6 +2019,8 @@ class ComfyAdaptiveDetailEnhancer25:
             pass
 
         image = safe_decode(vae, latent)
+        # allow user cancel right after initial decode
+        model_management.throw_exception_if_processing_interrupted()
 
         tuned_steps, tuned_cfg, tuned_denoise = AdaptiveSamplerHelper().tune(
             image, steps, cfg, denoise)
@@ -2046,7 +2051,10 @@ class ComfyAdaptiveDetailEnhancer25:
                     str(sampler_name), str(scheduler), float(current_cfg), float(current_denoise),
                     base_seed=0, step_tag=step_tag,
                     clip_vision=clip_vision, reference_image=reference_image, clipseg_text=str(clipseg_text))
-        except Exception:
+        except Exception as e:
+            # propagate user cancel; swallow only non-interrupt errors
+            if isinstance(e, model_management.InterruptProcessingException):
+                raise
             pass
 
         # Visual separation and start marker after seed is finalized
@@ -2189,7 +2197,11 @@ class ComfyAdaptiveDetailEnhancer25:
                 clipseg_enable = False
                 # Depth gate cache for micro-detail injection (reuse per resolution)
                 depth_gate_cache = {"size": None, "mask": None}
+                # check once more right before the loop starts
+                model_management.throw_exception_if_processing_interrupted()
                 for i in range(iterations):
+                    # cooperative cancel at the start of each iteration
+                    model_management.throw_exception_if_processing_interrupted()
                     if i % 2 == 0:
                         clear_gpu_and_ram_cache()
 
@@ -2420,7 +2432,9 @@ class ComfyAdaptiveDetailEnhancer25:
                             batch_inds = current_latent.get("batch_index", None)
                             noise = _sample.prepare_noise(lat_img, int(iter_seed), batch_inds)
                             noise_mask = current_latent.get("noise_mask", None)
-                            callback = nodes.latent_preview.prepare_callback(sampler_model, int(current_steps))
+                            callback = _wrap_interruptible_callback(sampler_model, int(current_steps))
+                            # cooperative cancel just before entering sampler
+                            model_management.throw_exception_if_processing_interrupted()
                             disable_pbar = not _utils.PROGRESS_BAR_ENABLED
                             sampler_obj = _samplers.sampler_object(str(sampler_name))
                             samples = _sample.sample_custom(
@@ -2432,15 +2446,28 @@ class ComfyAdaptiveDetailEnhancer25:
                             current_latent = {**current_latent}
                             current_latent["samples"] = samples
                         except Exception as e:
+                            # Before any fallback, propagate user cancel if set
+                            try:
+                                model_management.throw_exception_if_processing_interrupted()
+                            except Exception:
+                                globals()["_MG_CANCEL_REQUESTED"] = False
+                                raise
+                            # Do not swallow user interruption; also check sentinel just in case
+                            if isinstance(e, model_management.InterruptProcessingException) or globals().get("_MG_CANCEL_REQUESTED", False):
+                                globals()["_MG_CANCEL_REQUESTED"] = False
+                                raise
                             # Fallback to original path if anything goes wrong
                             print(f"[CADE2.5][MGHybrid] fallback to common_ksampler due to: {e}")
-                            current_latent, = nodes.common_ksampler(
+                            current_latent, = _interruptible_ksampler(
                                 sampler_model, iter_seed, int(current_steps), current_cfg, sampler_name, _scheduler_names()[0],
                                 positive, negative, current_latent, denoise=current_denoise)
                     else:
-                        current_latent, = nodes.common_ksampler(
+                        current_latent, = _interruptible_ksampler(
                             sampler_model, iter_seed, int(current_steps), current_cfg, sampler_name, scheduler,
                             positive, negative, current_latent, denoise=current_denoise)
+
+                    # cooperative cancel immediately after sampling
+                    model_management.throw_exception_if_processing_interrupted()
 
                     if bool(latent_compare):
                         latent_diff = current_latent["samples"] - prev_samples
@@ -2477,6 +2504,8 @@ class ComfyAdaptiveDetailEnhancer25:
                         pass
 
                     image = safe_decode(vae, current_latent)
+                    # and again after decode before post-processing
+                    model_management.throw_exception_if_processing_interrupted()
 
                     # Polish mode: keep global form (low frequencies) from reference while letting details refine
                     if bool(polish_enable) and (i >= int(polish_start_after)):
@@ -2668,6 +2697,16 @@ class ComfyAdaptiveDetailEnhancer25:
                 CURRENT_ONNX_MASK_BCHW = None
             except Exception:
                 pass
+            try:
+                globals()["_MG_CANCEL_REQUESTED"] = False
+                clear_gpu_and_ram_cache()
+            except Exception:
+                pass
+            # best-effort cache cleanup on cancel or error
+            try:
+                clear_gpu_and_ram_cache()
+            except Exception:
+                pass
 
         if apply_ids:
             image, = IntelligentDetailStabilizer().stabilize(image, ids_strength)
@@ -2846,6 +2885,8 @@ def _smart_seed_select(model,
                        step_tag: str | None = None) -> int:
     # Log start of SmartSeed selection
     try:
+        # cooperative cancel before any smart-seed work
+        model_management.throw_exception_if_processing_interrupted()
         try:
             # Visual separation before SmartSeed block
             print("")
@@ -2885,14 +2926,18 @@ def _smart_seed_select(model,
         best_seed = cands[0]
         best_score = -1e9
         for sd in cands:
+            # allow user to cancel between candidates
+            model_management.throw_exception_if_processing_interrupted()
             try:
                 # quick KSampler preview at low steps
                 lat_in = {"samples": latent["samples"].clone()} if isinstance(latent, dict) else latent
-                lat_out, = nodes.common_ksampler(
+                lat_out, = _interruptible_ksampler(
                     model, int(sd), int(probe_steps), float(cfg), str(sampler_name), str(scheduler),
                     positive, negative, lat_in, denoise=float(min(denoise, 0.65))
                 )
                 img = safe_decode(vae, lat_out)
+                # and again right after decode
+                model_management.throw_exception_if_processing_interrupted()
                 # Base score: edge density toward a target + low speckle + balanced exposure
                 ed = _edge_density(img)
                 speck = _speckle_fraction(img)
@@ -2937,7 +2982,11 @@ def _smart_seed_select(model,
                 if score > best_score:
                     best_score = score
                     best_seed = sd
-            except Exception:
+            except Exception as e:
+                # do not swallow user interruption; also honour sentinel
+                if isinstance(e, model_management.InterruptProcessingException) or globals().get("_MG_CANCEL_REQUESTED", False):
+                    globals()["_MG_CANCEL_REQUESTED"] = False
+                    raise
                 continue
 
         # Log end with selected seed
@@ -2949,7 +2998,11 @@ def _smart_seed_select(model,
         except Exception:
             pass
         return int(best_seed & 0xFFFFFFFFFFFFFFFF)
-    except Exception:
+    except Exception as e:
+        if isinstance(e, model_management.InterruptProcessingException) or globals().get("_MG_CANCEL_REQUESTED", False):
+            globals()["_MG_CANCEL_REQUESTED"] = False
+            # propagate cancel to stop the whole prompt cleanly
+            raise
         # Fallback to time-based random
         try:
             import time
@@ -2966,3 +3019,30 @@ def _smart_seed_select(model,
         return fallback_seed
 
 
+def _wrap_interruptible_callback(model, steps):
+    base_cb = nodes.latent_preview.prepare_callback(model, int(steps))
+    def _cb(step, x0, x, total_steps):
+        model_management.throw_exception_if_processing_interrupted()
+        return base_cb(step, x0, x, total_steps)
+    return _cb
+
+def _interruptible_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
+                            positive, negative, latent, denoise=1.0):
+    lat_img = _sample.fix_empty_latent_channels(model, latent["samples"])
+    batch_inds = latent.get("batch_index", None)
+    noise = _sample.prepare_noise(lat_img, int(seed), batch_inds)
+    noise_mask = latent.get("noise_mask", None)
+    callback = _wrap_interruptible_callback(model, int(steps))
+    # cooperative cancel just before sampler entry
+    model_management.throw_exception_if_processing_interrupted()
+    disable_pbar = not _utils.PROGRESS_BAR_ENABLED
+    samples = _sample.sample(
+        model, noise, int(steps), float(cfg), str(sampler_name), str(scheduler),
+        positive, negative, lat_img,
+        denoise=float(denoise), disable_noise=False, start_step=None, last_step=None,
+        force_full_denoise=False, noise_mask=noise_mask, callback=callback,
+        disable_pbar=disable_pbar, seed=int(seed)
+    )
+    out = {**latent}
+    out["samples"] = samples
+    return (out,)
