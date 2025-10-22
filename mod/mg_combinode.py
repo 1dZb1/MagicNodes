@@ -60,6 +60,12 @@ def _unload_old_checkpoint(current_path):
 class MagicNodesCombiNode:
     @classmethod
     def INPUT_TYPES(cls):
+        def _loras_with_none():
+            try:
+                return ["None"] + list(folder_paths.get_filename_list("loras"))
+            except Exception:
+                return ["None"]
+
         return {
             "required": {
             
@@ -72,37 +78,37 @@ class MagicNodesCombiNode:
 
             # --- LoRA 1 ---
             "use_lora_1": ("BOOLEAN", {"default": True}),
-            "lora_1": (folder_paths.get_filename_list("loras"), {}),
+            "lora_1": (_loras_with_none(), {}),
             "strength_model_1": ("FLOAT", {"default": 1.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_1": ("FLOAT", {"default": 1.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
 
             # --- LoRA 2 ---
             "use_lora_2": ("BOOLEAN", {"default": False}),
-            "lora_2": (folder_paths.get_filename_list("loras"), {}),
+            "lora_2": (_loras_with_none(), {}),
             "strength_model_2": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_2": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
 
             # --- LoRA 3 ---
             "use_lora_3": ("BOOLEAN", {"default": False}),
-            "lora_3": (folder_paths.get_filename_list("loras"), {}),
+            "lora_3": (_loras_with_none(), {}),
             "strength_model_3": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_3": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
 
             # --- LoRA 4 ---
             "use_lora_4": ("BOOLEAN", {"default": False}),
-            "lora_4": (folder_paths.get_filename_list("loras"), {}),
+            "lora_4": (_loras_with_none(), {}),
             "strength_model_4": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_4": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
 
             # --- LoRA 5 ---
             "use_lora_5": ("BOOLEAN", {"default": False}),
-            "lora_5": (folder_paths.get_filename_list("loras"), {}),
+            "lora_5": (_loras_with_none(), {}),
             "strength_model_5": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_5": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
 
             # --- LoRA 6 ---
             "use_lora_6": ("BOOLEAN", {"default": False}),
-            "lora_6": (folder_paths.get_filename_list("loras"), {}),
+            "lora_6": (_loras_with_none(), {}),
             "strength_model_6": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             "strength_clip_6": ("FLOAT", {"default": 0.0, "min": -1.5, "max": 1.5, "step": 0.01,}),
             },
@@ -302,18 +308,30 @@ class MagicNodesCombiNode:
         lora_stack = []  # list of (lora_file, sc, sm)
         defer_clip = bool(standard_pipeline)
         for use_lora, lora_name, sm, sc in loras:
-            if use_lora and lora_name:
-                lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
-                active_lora_paths.append(lora_path)
-                # keep lora object to avoid reloading
-                if lora_path in _lora_cache:
-                    lora_file = _lora_cache[lora_path]
-                else:
-                    lora_file = comfy.utils.load_torch_file(lora_path, safe_load=True)
-                    _lora_cache[lora_path] = lora_file
-                lora_stack.append((lora_file, float(sc), float(sm)))
-                sc_apply = 0.0 if defer_clip else sc
-                model, clip = comfy.sd.load_lora_for_models(model, clip, lora_file, sm, sc_apply)
+            # Skip when disabled or name empty
+            if not use_lora or not lora_name:
+                continue
+            # Resolve path safely (do not raise if missing)
+            try:
+                lora_path = folder_paths.get_full_path("loras", lora_name)
+            except Exception:
+                lora_path = None
+            if not lora_path or not os.path.exists(lora_path):
+                try:
+                    print(f"[CombiNode] LoRA '{lora_name}' not found; skipping.")
+                except Exception:
+                    pass
+                continue
+            active_lora_paths.append(lora_path)
+            # keep lora object to avoid reloading
+            if lora_path in _lora_cache:
+                lora_file = _lora_cache[lora_path]
+            else:
+                lora_file = comfy.utils.load_torch_file(lora_path, safe_load=True)
+                _lora_cache[lora_path] = lora_file
+            lora_stack.append((lora_file, float(sc), float(sm)))
+            sc_apply = 0.0 if defer_clip else sc
+            model, clip = comfy.sd.load_lora_for_models(model, clip, lora_file, sm, sc_apply)
 
         _clear_unused_loras(active_lora_paths)
         # Warn about duplicate LoRA selections across slots
