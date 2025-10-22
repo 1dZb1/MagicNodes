@@ -60,11 +60,11 @@ Photo Dog
 <b>I highly recommend working with SmartSeed.</b>
 - CADE2.5 pipeline does not just upscale the image, it iterates and adds small details, doing it carefully, at every stage.
 
-## Hardware Requirements
-- GPU VRAM: ~10-28 GB (free memory) for the default presets (start latent ~ 672x944 -> final ~ 3688x5192 across 4 steps). 15-25 GB is recommended; 32 GB is comfortable for large prompts/batches.
-- System RAM: ~12-20 GB during generation (depends on start latent and whether Depth/ControlFusion are enabled). 16+ GB recommended.
+## Hardware
+- The pipeline is designed for good hardware (tested on RTX5090 (32Gb) and RAM 92Gb), try to keep the starting latency very small, because there is an upscale at the steps and you risk getting errors if you push up the starting values.
+- start latent ~ 672x944 -> final ~ 3688x5192 across 4 steps.
 - Notes
-  - Lowering the starting latent (e.g., 512x768) reduces both VRAM and RAM.
+  - Lowering the starting latent (e.g., 512x768) or lower, reduces both VRAM and RAM.
   - Disabling hi-res depth/edges (ControlFusion) reduces peaks. (not recommended!)
   - Depth weights add a bit of RAM on load; models live under `depth-anything/`. 
 
