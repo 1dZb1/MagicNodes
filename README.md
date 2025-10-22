@@ -80,7 +80,7 @@ p.s.: To work, you definitely need to install `SageAttention v.2.2.0`, `version 
 Next:
 1. Clone or download this repo into `ComfyUI/custom_nodes/`
 2. Install helpers: `pip install -r requirements.txt`
-3. Take my negative LoRA `models/LoRA/mg_7lambda_negative.safetensors` and place the file in ComfyUI, to `ComfyUI/models/loras`
+3. I recomend, take my negative LoRA `mg_7lambda_negative.safetensors` in HF https://huggingface.co/DD32/mg_7lambda_negative/blob/main/mg_7lambda_negative.safetensors and place the file in ComfyUI, to `ComfyUI/models/loras`
 4. download model `depth_anything_v2_vitl.pth` https://huggingface.co/depth-anything/Depth-Anything-V2-Large/tree/main and place inside in to `depth-anything/` folder.
 5. Workflows
 Folder `workflows/` contains ready-to-use graphs:
@@ -186,21 +186,12 @@ MagicNodes/
 ├─ vendor/
 │  └─ depth_anything_v2/        # vendored Depth Anything v2 code (Apache-2.0)
 │ 
-├─ models/
-│  └─ LoRA/
-│     └─ mg_7lambda_negative.safetensors
-│ 
 ├─ workflows/ 
 │  ├─ mg_SuperSimple-Workflow.json
 │  └─ mg_Easy-Workflow.json           
 |  
 └─ requirements.txt
 ```
-
-Models folder
-- The repo includes a sample negative LoRA at `models/LoRA/mg_7lambda_negative.safetensors`.
-- To use it in ComfyUI, copy or move the file to `ComfyUI/models/loras` — it will then appear in LoRA selectors.
-- Keeping a copy under `models/` here is fine as a backup.
 
 Depth models (Depth Anything v2)
 - Place DA v2 weights (`.pth`) in `depth-anything/`. Recommended: `depth_anything_v2_vitl.pth` (ViT-L). Supported names include:
