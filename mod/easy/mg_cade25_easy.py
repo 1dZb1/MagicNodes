@@ -236,6 +236,12 @@ def _clipseg_build_mask(image_bhwc: torch.Tensor,
         # Prepare preview image (CPU PIL)
         target = int(max(16, min(1024, preview)))
         img = image_bhwc.detach().to('cpu')
+        if img.ndim == 5:
+            # squeeze depth if present
+            if img.shape[1] == 1:
+                img = img[:, 0]
+            else:
+                img = img[:, 0]
         B, H, W, C = img.shape
         x = img[0].movedim(-1, 0).unsqueeze(0)  # 1,C,H,W
         x = F.interpolate(x, size=(target, target), mode='bilinear', align_corners=False)
@@ -1157,17 +1163,31 @@ def _soft_symmetry_blend(image_bhwc: torch.Tensor,
 
 
 def _gaussian_blur_nchw(x: torch.Tensor, sigma: float = 1.0, radius: int = 1) -> torch.Tensor:
-    """Lightweight depthwise Gaussian blur for NCHW tensors.
+    """Lightweight depthwise Gaussian blur for NCHW or NCDHW tensors.
     Uses reflect padding and a normalized kernel built by _gaussian_kernel.
     """
     if radius <= 0:
         return x
     ksz = radius * 2 + 1
     kernel = _gaussian_kernel(ksz, sigma, device=x.device).to(dtype=x.dtype)
-    kernel = kernel.repeat(x.shape[1], 1, 1).unsqueeze(1)  # [C,1,K,K]
-    x_pad = F.pad(x, (radius, radius, radius, radius), mode='reflect')
-    y = F.conv2d(x_pad, kernel, padding=0, groups=x.shape[1])
-    return y
+    # Support 5D by folding depth into batch
+    if x.ndim == 5:
+        b, c, d, h, w = x.shape
+        x2 = x.permute(0, 2, 1, 3, 4).reshape(b * d, c, h, w)
+        k = kernel.repeat(c, 1, 1).unsqueeze(1)  # [C,1,K,K]
+        x_pad = F.pad(x2, (radius, radius, radius, radius), mode='reflect')
+        y2 = F.conv2d(x_pad, k, padding=0, groups=c)
+        y = y2.reshape(b, d, c, h, w).permute(0, 2, 1, 3, 4)
+        return y
+    # 4D path
+    if x.ndim == 4:
+        b, c, h, w = x.shape
+        k = kernel.repeat(c, 1, 1).unsqueeze(1)  # [C,1,K,K]
+        x_pad = F.pad(x, (radius, radius, radius, radius), mode='reflect')
+        y = F.conv2d(x_pad, k, padding=0, groups=c)
+        return y
+    # Fallback: return input if unexpected dims
+    return x
 
 
 def _letterbox_nchw(x: torch.Tensor, target: int, pad_val: float = 114.0 / 255.0) -> torch.Tensor:
@@ -1451,6 +1471,8 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
         return eps
 
     m.set_model_sampler_cfg_function(cfg_func, disable_cfg1_optimization=True)
+
+    # Note: ControlNet class-label injection wrapper removed to keep CADE neutral.
 
     # Optional directional post-mix (Muse Blend), global, no ONNX
     if bool(mahiro_plus_enable):
@@ -1736,6 +1758,38 @@ def _build_cf_edge_mask_from_step(image_bhwc: torch.Tensor, preset_step: str) ->
         return ed.unsqueeze(0).unsqueeze(-1)
     except Exception:
         return None
+
+def _mask_to_like(mask_bhw1: torch.Tensor, like_bhwc: torch.Tensor) -> torch.Tensor:
+    try:
+        if mask_bhw1 is None or like_bhwc is None:
+            return mask_bhw1
+        if mask_bhw1.ndim != 4 or like_bhwc.ndim != 4:
+            return mask_bhw1
+        _, Ht, Wt, _ = like_bhwc.shape
+        _, Hm, Wm, C = mask_bhw1.shape
+        if (Hm, Wm) == (Ht, Wt):
+            return mask_bhw1
+        m = mask_bhw1.movedim(-1, 1)
+        m = F.interpolate(m, size=(Ht, Wt), mode='bilinear', align_corners=False)
+        return m.movedim(1, -1).clamp(0, 1)
+    except Exception:
+        return mask_bhw1
+
+def _align_mask_pair(a_bhw1: torch.Tensor, b_bhw1: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    try:
+        if a_bhw1 is None or b_bhw1 is None:
+            return a_bhw1, b_bhw1
+        if a_bhw1.ndim != 4 or b_bhw1.ndim != 4:
+            return a_bhw1, b_bhw1
+        _, Ha, Wa, Ca = a_bhw1.shape
+        _, Hb, Wb, Cb = b_bhw1.shape
+        if (Ha, Wa) == (Hb, Wb):
+            return a_bhw1, b_bhw1
+        m = b_bhw1.movedim(-1, 1)
+        m = F.interpolate(m, size=(Ha, Wa), mode='bilinear', align_corners=False)
+        return a_bhw1, m.movedim(1, -1).clamp(0, 1)
+    except Exception:
+        return a_bhw1, b_bhw1
 def _mask_dilate(mask_bhw1: torch.Tensor, k: int = 3) -> torch.Tensor:
     if k <= 1:
         return mask_bhw1
@@ -2124,9 +2178,13 @@ class ComfyAdaptiveDetailEnhancer25:
                     try:
                         cmask = _clipseg_build_mask(image, clipseg_text, int(clipseg_preview), float(clipseg_threshold), float(clipseg_blur), int(clipseg_dilate), float(clipseg_gain), None, None, float(clipseg_ref_threshold))
                         if cmask is not None:
+                            if pre_mask is not None:
+                                pre_mask = _mask_to_like(pre_mask, image)
+                            cmask = _mask_to_like(cmask, image)
                             if pre_mask is None:
                                 pre_mask = cmask
                             else:
+                                pre_mask, cmask = _align_mask_pair(pre_mask, cmask)
                                 if clipseg_blend == "replace":
                                     pre_mask = cmask
                                 elif clipseg_blend == "intersect":
@@ -2147,6 +2205,8 @@ class ComfyAdaptiveDetailEnhancer25:
                         except Exception:
                             emask = None
                     if emask is not None:
+                        if pre_mask is not None:
+                            pre_mask, emask = _align_mask_pair(pre_mask, emask)
                         pre_mask = emask if pre_mask is None else (1.0 - (1.0 - pre_mask) * (1.0 - emask)).clamp(0, 1)
                 if pre_mask is not None:
                     onnx_mask_last = pre_mask
@@ -2271,6 +2331,7 @@ class ComfyAdaptiveDetailEnhancer25:
                                 if onnx_mask_last is None:
                                     onnx_mask_last = em2
                                 else:
+                                    onnx_mask_last, em2 = _align_mask_pair(onnx_mask_last, em2)
                                     onnx_mask_last = (1.0 - (1.0 - onnx_mask_last) * (1.0 - em2)).clamp(0, 1)
                                 om = onnx_mask_last.movedim(-1, 1)
                                 area = float(om.mean().item())
@@ -2293,8 +2354,10 @@ class ComfyAdaptiveDetailEnhancer25:
                                     if clipseg_blend == "replace":
                                         fused = cmask
                                     elif clipseg_blend == "intersect":
+                                        onnx_mask_last, cmask = _align_mask_pair(onnx_mask_last, cmask)
                                         fused = (onnx_mask_last * cmask).clamp(0, 1)
                                     else:
+                                        onnx_mask_last, cmask = _align_mask_pair(onnx_mask_last, cmask)
                                         fused = (1.0 - (1.0 - onnx_mask_last) * (1.0 - cmask)).clamp(0, 1)
                                 onnx_mask_last = fused
                                 om = fused.movedim(-1, 1)
@@ -2470,7 +2533,16 @@ class ComfyAdaptiveDetailEnhancer25:
                     model_management.throw_exception_if_processing_interrupted()
 
                     if bool(latent_compare):
-                        latent_diff = current_latent["samples"] - prev_samples
+                        _cur = current_latent["samples"]
+                        _prev = prev_samples
+                        try:
+                            if _prev.device != _cur.device:
+                                _prev = _prev.to(_cur.device)
+                            if _prev.dtype != _cur.dtype:
+                                _prev = _prev.to(dtype=_cur.dtype)
+                        except Exception:
+                            pass
+                        latent_diff = _cur - _prev
                         rms = torch.sqrt(torch.mean(latent_diff * latent_diff))
                         drift = float(rms.item())
                         if drift > float(threshold):

@@ -164,14 +164,19 @@ MagicNodes/
 │  │  ├─ mg_controlfusion_easy.py
 │  │  └─ mg_supersimple_easy.py
 │  │  └─ preset_loader.py
-│  └─ hard/
-│     ├─ mg_cade25.py
-│     ├─ mg_controlfusion.py
-│     ├─ mg_tde2.py
-│     ├─ mg_upscale_module.py
-│     ├─ mg_ids.py
-│     └─ mg_zesmart_sampler_v1_1.py
-│ 
+│  ├─ hard/
+│  │  ├─ mg_cade25.py
+│  │  ├─ mg_controlfusion.py
+│  │  ├─ mg_tde2.py
+│  │  ├─ mg_upscale_module.py
+│  │  ├─ mg_ids.py
+│  │  └─ mg_zesmart_sampler_v1_1.py
+│  │
+│  ├─ mg_combinode.py
+│  ├─ mg_latent_adapter.py
+│  ├─ mg_sagpu_attention.py
+│  └─  mg_seed_latent.py
+│  
 ├─ pressets/
 │  ├─ mg_cade25.cfg
 │  └─ mg_controlfusion.cfg
@@ -240,7 +245,14 @@ Depth models (Depth Anything v2)
   - Keep dimensions multiples of 8; recommended starting sizes around ~672x944 (other aspect ratios work). With SuperSimple’s default scale, step 4 lands near ~3688x5192.
   - `mix_image=True` encodes the provided image via VAE and adds noise: a soft way to keep global structure while allowing refinement downstream.
   - For run-to-run comparability, hold your sampler seed fixed (in SuperSimple/CADE). SeedLatent itself does not expose a seed; variation is primarily controlled by the sampler seed.
-  - Batch friendly: `batch_size>1` produces independent latents of the chosen size.
+- Batch friendly: `batch_size>1` produces independent latents of the chosen size.
+
+### Magic Latent Adapter (mg_latent_adapter.py) !experimental!
+- Purpose: small adapter node that generates or adapts a `LATENT` to match the target model’s latent format (channels and dimensions), including 5D layouts (`NCDHW`) when required. Two modes: `generate` (make a fresh latent aligned to VAE stride) and `adapt` (reshape/channel‑match an existing latent).
+- How it works: relies on Comfy’s `fix_empty_latent_channels` and reads the model’s `latent_format` to adjust channel count; aligns spatial size to VAE stride; handles 4D (`NCHW`) and 5D (`NCDHW`).
+- Experimental: added to ease early, experimental support for FLUX/Qwen‑like models by reducing shape/dimension friction. Still evolving; treat as opt‑in.
+- Usage: place before CADE/your sampler. In `generate` mode you can also enable image mixing via VAE; in `adapt` mode feed any upstream `LATENT` and the current `MODEL`. A simple family switch (`auto / SD / SDXL / FLUX`) controls stride fallback when VAE isn’t provided.
+- Notes: quality with FLUX/Qwen models also depends on using the proper text encoders/conditioning nodes for those families; this adapter only solves latent shapes, not conditioning mismatches.
 
 ## Dependencies (Why These Packages)
 - transformers — used by CADE for CLIPSeg (CIDAS/clipseg-rd64-refined) to build text‑driven masks (e.g., face/hands). If missing, CLIPSeg is disabled gracefully.
