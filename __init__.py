@@ -25,6 +25,7 @@ from .mod.hard.mg_cade25 import ComfyAdaptiveDetailEnhancer25
 from .mod.hard.mg_ids import IntelligentDetailStabilizer
 from .mod.mg_seed_latent import MagicSeedLatent
 from .mod.mg_sagpu_attention import PatchSageAttention
+from .mod.mg_latent_adapter import MagicLatentAdapter
 from .mod.hard.mg_controlfusion import MG_ControlFusion
 from .mod.hard.mg_zesmart_sampler_v1_1 import MG_ZeSmartSampler
 from .mod.easy.mg_cade25_easy import CADEEasyUI as ComfyAdaptiveDetailEnhancer25_Easy
@@ -59,6 +60,7 @@ NODE_CLASS_MAPPINGS = {
     "MagicNodesCombiNode": MagicNodesCombiNode,
     "MagicSeedLatent": MagicSeedLatent,
     "PatchSageAttention": PatchSageAttention,
+    "MagicLatentAdapter": MagicLatentAdapter, # experimental
     "MagicUpscaleModule": MagicUpscaleModule,
     "ComfyAdaptiveDetailEnhancer25": ComfyAdaptiveDetailEnhancer25,
     "IntelligentDetailStabilizer": IntelligentDetailStabilizer,
@@ -73,8 +75,8 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MagicNodesCombiNode": "MG_CombiNode",
     "MagicSeedLatent": "MG_SeedLatent",
-    # TDE removed from this build
     "PatchSageAttention": "MG_AccelAttention",
+    "MagicLatentAdapter": "MG_LatentAdapter", # experimental
     "ComfyAdaptiveDetailEnhancer25": "MG_CADE 2.5",
     "MG_ControlFusion": "MG_ControlFusion",
     "MG_ZeSmartSampler": "MG_ZeSmartSampler",
