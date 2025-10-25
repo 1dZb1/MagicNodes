@@ -1037,12 +1037,31 @@ def _scheduler_names():
 
 
 def safe_decode(vae, lat, tile=512, ovlp=64):
-    h, w = lat["samples"].shape[-2:]
-    if min(h, w) > 1024:
-        # Increase overlap for ultra-hires to reduce seam artifacts
-        ov = 128 if max(h, w) > 2048 else ovlp
-        return vae.decode_tiled(lat["samples"], tile_x=tile, tile_y=tile, overlap=ov)
-    return vae.decode(lat["samples"])
+    # Ensure we don't build autograd graphs during final decode steps
+    with torch.inference_mode():
+        h, w = lat["samples"].shape[-2:]
+        if min(h, w) > 1024:
+            # Increase overlap for ultra-hires to reduce seam artifacts
+            ov = 128 if max(h, w) > 2048 else ovlp
+            out = vae.decode_tiled(lat["samples"], tile_x=tile, tile_y=tile, overlap=ov)
+        else:
+            out = vae.decode(lat["samples"])
+    # Move to CPU and detach to release VRAM/graphs early
+    try:
+        try:
+            out = out.detach()
+        except Exception:
+            pass
+        try:
+            out = out.to('cpu')
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    return out
 
 
 def safe_encode(vae, img, tile=512, ovlp=64):
@@ -1066,10 +1085,17 @@ def safe_encode(vae, img, tile=512, ovlp=64):
         x_nchw = img.movedim(-1, 1)
         x_nchw = F.pad(x_nchw, (0, pad_w, 0, pad_h), mode='replicate')
         x = x_nchw.movedim(1, -1)
-    if min(Ht, Wt) > 1024:
-        ov = 128 if max(Ht, Wt) > 2048 else ovlp
-        return vae.encode_tiled(x[:, :, :, :3], tile_x=tile, tile_y=tile, overlap=ov)
-    return vae.encode(x[:, :, :, :3])
+    with torch.inference_mode():
+        if min(Ht, Wt) > 1024:
+            ov = 128 if max(Ht, Wt) > 2048 else ovlp
+            out = vae.encode_tiled(x[:, :, :, :3], tile_x=tile, tile_y=tile, overlap=ov)
+        else:
+            out = vae.encode(x[:, :, :, :3])
+    try:
+        torch.cuda.synchronize() if torch.cuda.is_available() else None
+    except Exception:
+        pass
+    return out
     
 
 

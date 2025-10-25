@@ -172,6 +172,7 @@ MagicNodes/
 │  │  ├─ mg_ids.py
 │  │  └─ mg_zesmart_sampler_v1_1.py
 │  │
+│  ├─ mg_cleanup.py
 │  ├─ mg_combinode.py
 │  ├─ mg_latent_adapter.py
 │  ├─ mg_sagpu_attention.py
@@ -226,6 +227,27 @@ Depth models (Depth Anything v2)
   - Smooth start via `polish_start_after` and `polish_keep_low_ramp`
 - `eps_scale` supported for gentle exposure shaping
 
+## MG_CleanUp (final memory cleanup node)
+
+- Purpose: a tiny end-of-graph node that aggressively frees RAM/VRAM and asks the OS to return freed pages. Place it at the very end of a workflow (ideally right after SaveImage).
+- Returns: passthrough `LATENT` and a small `IMAGE` preview (32×32). Works even if you do not wire model/conditioning — cleanup still runs.
+- What it does (two passes: immediate and +150 ms):
+  - CUDA sync, `gc.collect()`, `torch.cuda.empty_cache()` + `ipc_collect()`
+  - Comfy model manager soft cache drop; when `hard_trim=true` also unloads loaded models (will reload on next run)
+  - Drops lightweight LRU/preview caches (when available)
+  - Windows: trims working set (`SetProcessWorkingSetSize` + `EmptyWorkingSet`) and best-effort system cache/standby purge
+  - Linux: `malloc_trim(0)` to release fragmented heap back to the OS
+  - Logs how much RAM/VRAM was freed in each pass
+
+- Inputs:
+  - `hard_trim` (bool): enable the strongest cleanup (unload models, OS-level trims).
+  - `sync_cuda` (bool): synchronize CUDA before cleanup (recommended).
+  - `hires_only_threshold` (int): run only when the latent longest side ≥ threshold; `0` = always.
+
+Notes:
+- Because models are unloaded in `hard_trim`, the next workflow run may take a bit longer to start (models will reload).
+- Use this node only at the end of a graph — it is intentionally aggressive.
+
 ## Depth Anything v2 (vendor)
 - Lives under `vendor/depth_anything_v2`; Apache-2.0 license
 
@@ -247,7 +269,7 @@ Depth models (Depth Anything v2)
   - For run-to-run comparability, hold your sampler seed fixed (in SuperSimple/CADE). SeedLatent itself does not expose a seed; variation is primarily controlled by the sampler seed.
 - Batch friendly: `batch_size>1` produces independent latents of the chosen size.
 
-### Magic Latent Adapter (mg_latent_adapter.py) !experimental!
+## Magic Latent Adapter (mg_latent_adapter.py) !experimental!
 - Purpose: small adapter node that generates or adapts a `LATENT` to match the target model’s latent format (channels and dimensions), including 5D layouts (`NCDHW`) when required. Two modes: `generate` (make a fresh latent aligned to VAE stride) and `adapt` (reshape/channel‑match an existing latent).
 - How it works: relies on Comfy’s `fix_empty_latent_channels` and reads the model’s `latent_format` to adjust channel count; aligns spatial size to VAE stride; handles 4D (`NCHW`) and 5D (`NCDHW`).
 - Experimental: added to ease early, experimental support for FLUX/Qwen‑like models by reducing shape/dimension friction. Still evolving; treat as opt‑in.

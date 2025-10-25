@@ -1,4 +1,4 @@
-import os, sys, importlib.util
+﻿import os, sys, importlib.util
 
 # Normalize package name so relative imports work even if loaded by absolute path
 if __name__ != 'MagicNodes':
@@ -25,6 +25,7 @@ from .mod.hard.mg_cade25 import ComfyAdaptiveDetailEnhancer25
 from .mod.hard.mg_ids import IntelligentDetailStabilizer
 from .mod.mg_seed_latent import MagicSeedLatent
 from .mod.mg_sagpu_attention import PatchSageAttention
+from .mod.mg_cleanup import MG_CleanUp
 from .mod.mg_latent_adapter import MagicLatentAdapter
 from .mod.hard.mg_controlfusion import MG_ControlFusion
 from .mod.hard.mg_zesmart_sampler_v1_1 import MG_ZeSmartSampler
@@ -60,6 +61,7 @@ NODE_CLASS_MAPPINGS = {
     "MagicNodesCombiNode": MagicNodesCombiNode,
     "MagicSeedLatent": MagicSeedLatent,
     "PatchSageAttention": PatchSageAttention,
+    "MG_CleanUp": MG_CleanUp,
     "MagicLatentAdapter": MagicLatentAdapter, # experimental
     "MagicUpscaleModule": MagicUpscaleModule,
     "ComfyAdaptiveDetailEnhancer25": ComfyAdaptiveDetailEnhancer25,
@@ -70,12 +72,14 @@ NODE_CLASS_MAPPINGS = {
     "ComfyAdaptiveDetailEnhancer25_Easy": ComfyAdaptiveDetailEnhancer25_Easy,
     "MG_ControlFusion_Easy": MG_ControlFusion_Easy,
     "MG_SuperSimple": MG_SuperSimple,
+
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "MagicNodesCombiNode": "MG_CombiNode",
     "MagicSeedLatent": "MG_SeedLatent",
     "PatchSageAttention": "MG_AccelAttention",
+    "MG_CleanUp": "MG_CleanUp",
     "MagicLatentAdapter": "MG_LatentAdapter", # experimental
     "ComfyAdaptiveDetailEnhancer25": "MG_CADE 2.5",
     "MG_ControlFusion": "MG_ControlFusion",
@@ -92,6 +96,7 @@ __all__ = [
     'NODE_CLASS_MAPPINGS',
     'NODE_DISPLAY_NAME_MAPPINGS',
 ]
+
 
 
 

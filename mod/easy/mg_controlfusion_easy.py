@@ -7,6 +7,7 @@ import numpy as np
 
 import comfy.model_management as model_management
 from .preset_loader import get as load_preset
+from ..hard.mg_upscale_module import clear_gpu_and_ram_cache
 
 
 _DEPTH_INIT = False
@@ -568,6 +569,11 @@ class MG_ControlFusion:
         # Apply visualization brightness only for preview
         prev = (prev * float(mask_brightness)).clamp(0.0, 1.0)
         prev = prev.unsqueeze(-1).repeat(1,1,3).to(device=dev, dtype=dtype).unsqueeze(0)
+        # Best-effort cleanup of caches to avoid sticky VRAM/RAM after node finishes
+        try:
+            clear_gpu_and_ram_cache()
+        except Exception:
+            pass
         return (pos_out, neg_out, prev)
 
 

@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 
 import comfy.model_management as model_management
+from .mg_upscale_module import clear_gpu_and_ram_cache
 
 
 _DEPTH_INIT = False
@@ -573,4 +574,16 @@ class MG_ControlFusion:
         # Apply visualization brightness only for preview
         prev = (prev * float(mask_brightness)).clamp(0.0, 1.0)
         prev = prev.unsqueeze(-1).repeat(1,1,3).to(device=dev, dtype=dtype).unsqueeze(0)
+        # Best-effort cleanup of heavy intermediates and caches after node finishes
+        try:
+            depth = None
+            edges = None
+            fused = None
+            hint = None
+        except Exception:
+            pass
+        try:
+            clear_gpu_and_ram_cache()
+        except Exception:
+            pass
         return (pos_out, neg_out, prev)
