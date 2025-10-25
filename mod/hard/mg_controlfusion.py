@@ -30,6 +30,47 @@ def _try_init_depth_anything(model_path: str):
     if _DEPTH_INIT:
         return _DEPTH_MODEL is not None
     _DEPTH_INIT = True
+    # Resolve model path: allow 'auto' or directory and prefer vitl>vitb>vits>vitg
+    try:
+        def _prefer_order(paths):
+            order = ["vitl", "vitb", "vits", "vitg"]
+            scored = []
+            for p in paths:
+                name = os.path.basename(p).lower()
+                score = 100
+                for i, tag in enumerate(order):
+                    if tag in name:
+                        score = i
+                        break
+                scored.append((score, p))
+            scored.sort(key=lambda x: x[0])
+            return [p for _, p in scored]
+
+        def _resolve_path(mp: str) -> str:
+            if isinstance(mp, str) and mp.strip().lower() == "auto":
+                mp = ""
+            if mp and os.path.isfile(mp):
+                return mp
+            search_dirs = []
+            if mp and os.path.isdir(mp):
+                search_dirs.append(mp)
+            base_dir = os.path.join(os.path.dirname(__file__), '..', 'depth-anything')
+            search_dirs.append(base_dir)
+            cand = []
+            for d in search_dirs:
+                try:
+                    for fn in os.listdir(d):
+                        if fn.lower().endswith('.pth') and 'depth_anything_v2' in fn.lower():
+                            cand.append(os.path.join(d, fn))
+                except Exception:
+                    pass
+            if cand:
+                return _prefer_order(cand)[0]
+            return mp
+
+        model_path = _resolve_path(model_path)
+    except Exception:
+        pass
     # Prefer our vendored implementation first
     try:
         from ...vendor.depth_anything_v2.dpt import DepthAnythingV2  # type: ignore
@@ -127,6 +168,22 @@ def _build_depth_map(image_bhwc: torch.Tensor, res: int, model_path: str, hires_
             d = torch.from_numpy(d)[None, None]  # 1,1,h,w
             d = F.interpolate(d, size=(H, W), mode='bilinear', align_corners=False)
             d = d[0, 0].to(device=dev, dtype=dtype)
+            # Heuristic de-banding: sometimes upstream returns column-wise banding
+            # Detect when column variance >> row variance, indicating vertical stripes
+            try:
+                with torch.no_grad():
+                    dr = d.clamp(0,1)
+                    # compute per-axis variance summaries in a small, cheap way
+                    vcol = torch.var(dr, dim=0).mean()
+                    vrow = torch.var(dr, dim=1).mean()
+                    if torch.isfinite(vcol) and torch.isfinite(vrow) and (vcol > 8.0 * (vrow + 1e-6)):
+                        # Apply mild horizontal smoothing only (reduce vertical banding)
+                        k = max(3, int(round(min(W, 21) // 2 * 2 + 1)))  # odd kernel up to ~21
+                        dr2 = F.avg_pool2d(dr.unsqueeze(0).unsqueeze(0), kernel_size=(1, k), stride=1, padding=(0, k//2))[0,0]
+                        # preserve global contrast by gentle blend
+                        d = (0.6 * dr + 0.4 * dr2).clamp(0,1)
+            except Exception:
+                pass
             d = d.clamp(0, 1)
             return d
         except Exception:

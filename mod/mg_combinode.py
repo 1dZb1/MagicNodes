@@ -294,7 +294,7 @@ class MagicNodesCombiNode:
 
         # single clear at start is enough; avoid double-clearing here
 
-        # Применение цепочки LoRA
+        # Apply LoRA chain
         loras = [
             (use_lora_1, lora_1, strength_model_1, strength_clip_1),
             (use_lora_2, lora_2, strength_model_2, strength_clip_2),
@@ -345,7 +345,7 @@ class MagicNodesCombiNode:
         except Exception:
             pass
 
-        # Embeddings Positive и Negative
+        # Embeddings: Positive and Negative
         # Standard pipeline: optionally use a shared CLIP after clip_layer + CLIP-LoRA
         # Select CLIP source for encoding: pristine when standard pipeline is enabled
         src_clip = clip_clean if bool(standard_pipeline) else clip

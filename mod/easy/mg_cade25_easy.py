@@ -1264,6 +1264,21 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
     # Spectral switching/adaptive low state
     spec_state = {"ema": None, "mode": "CFGZeroFD"}
 
+    # External reset hook to emulate fresh state per iteration without re-cloning the model
+    def _reset_state():
+        try:
+            prev_delta["t"] = None
+            sigma_seen["max"] = None
+            sigma_seen["min"] = None
+            spec_state["ema"] = None
+            spec_state["mode"] = "CFGZeroFD"
+        except Exception:
+            pass
+    try:
+        setattr(m, "mg_guidance_reset", _reset_state)
+    except Exception:
+        pass
+
     def cfg_func(args):
         cond = args["cond"]
         uncond = args["uncond"]
@@ -1748,11 +1763,8 @@ def _build_cf_edge_mask_from_step(image_bhwc: torch.Tensor, preset_step: str) ->
                 ed = (ed * g).clamp(0,1)
             except Exception:
                 pass
-        # Apply opacity + edge strength + blend factor (as extra gain for edges only)
-        total_gain = max(0.0, float(edge_alpha)) * max(0.0, float(edge_strength_mul)) * max(0.0, float(blend_factor))
-        # Keep at least alpha if blend_factor is set to 0 in presets
-        if total_gain == 0.0:
-            total_gain = max(0.0, float(edge_alpha))
+        # Apply opacity + edge strength (keep blend_factor only for ControlNet stage, not for mask amplitude)
+        total_gain = max(0.0, float(edge_alpha)) * max(0.0, float(edge_strength_mul))
         ed = (ed * total_gain).clamp(0,1)
         # Return BHWC single-channel
         return ed.unsqueeze(0).unsqueeze(-1)
@@ -2257,6 +2269,19 @@ class ComfyAdaptiveDetailEnhancer25:
                 clipseg_enable = False
                 # Depth gate cache for micro-detail injection (reuse per resolution)
                 depth_gate_cache = {"size": None, "mask": None}
+                # Prepare guided sampler once per node run to avoid cloning model each iteration
+                sampler_model = _wrap_model_with_guidance(
+                      model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
+                      use_zero_init=bool(use_zero_init), zero_init_steps=int(zero_init_steps),
+                      fdg_low=float(fdg_low), fdg_high=float(fdg_high), fdg_sigma=float(fdg_sigma),
+                      midfreq_enable=bool(midfreq_enable), midfreq_gain=float(midfreq_gain), midfreq_sigma_lo=float(midfreq_sigma_lo), midfreq_sigma_hi=float(midfreq_sigma_hi),
+                      ze_zero_steps=int(ze_res_zero_steps),
+                      ze_adaptive=bool(ze_adaptive), ze_r_switch_hi=float(ze_r_switch_hi), ze_r_switch_lo=float(ze_r_switch_lo),
+                      fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
+                      use_local_mask=bool(onnx_local_guidance), mask_inside=float(onnx_mask_inside), mask_outside=float(onnx_mask_outside),
+                      mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
+                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
+                  )
                 # check once more right before the loop starts
                 model_management.throw_exception_if_processing_interrupted()
                 for i in range(iterations):
@@ -2264,6 +2289,13 @@ class ComfyAdaptiveDetailEnhancer25:
                     model_management.throw_exception_if_processing_interrupted()
                     if i % 2 == 0:
                         clear_gpu_and_ram_cache()
+
+                    # Reset guidance internal state so each iteration starts clean
+                    try:
+                        if hasattr(sampler_model, "mg_guidance_reset"):
+                            sampler_model.mg_guidance_reset()
+                    except Exception:
+                        pass
 
                     prev_samples = current_latent["samples"].clone().detach()
 
@@ -2376,19 +2408,8 @@ class ComfyAdaptiveDetailEnhancer25:
                     except Exception:
                         pass
 
-                    # Guidance override via cfg_func when requested
-                    sampler_model = _wrap_model_with_guidance(
-                          model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
-                          use_zero_init=bool(use_zero_init), zero_init_steps=int(zero_init_steps),
-                          fdg_low=float(fdg_low), fdg_high=float(fdg_high), fdg_sigma=float(fdg_sigma),
-                          midfreq_enable=bool(midfreq_enable), midfreq_gain=float(midfreq_gain), midfreq_sigma_lo=float(midfreq_sigma_lo), midfreq_sigma_hi=float(midfreq_sigma_hi),
-                          ze_zero_steps=int(ze_res_zero_steps),
-                          ze_adaptive=bool(ze_adaptive), ze_r_switch_hi=float(ze_r_switch_hi), ze_r_switch_lo=float(ze_r_switch_lo),
-                          fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
-                          use_local_mask=bool(onnx_local_guidance), mask_inside=float(onnx_mask_inside), mask_outside=float(onnx_mask_outside),
-                          mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
-                          eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
-                      )
+                    # Sampler model prepared once above; reused across iterations (no-op here)
+                    sampler_model = sampler_model
 
                     # Local best-of-2 in ROI (hands/face), only on early iteration to limit overhead
                     try:
@@ -2753,6 +2774,12 @@ class ComfyAdaptiveDetailEnhancer25:
             # Always disable NAG patch and clear local mask, even on errors
             try:
                 sa_patch.enable_crossattention_nag_patch(False)
+            except Exception:
+                pass
+            # Turn off attention-entropy probe (AQClip Attn-mode) to avoid holding last maps
+            try:
+                if hasattr(sa_patch, "enable_attention_entropy_capture"):
+                    sa_patch.enable_attention_entropy_capture(False)
             except Exception:
                 pass
             # Disable KV pruning as well (avoid leaking state)

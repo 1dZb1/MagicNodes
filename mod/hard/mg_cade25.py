@@ -150,7 +150,7 @@ def _clipseg_build_mask(image_bhwc: torch.Tensor,
                 cur = _encode_clip_image(image_bhwc, clip_vision, target_res=224)
                 dist = _clip_cosine_distance(cur, ref_embed)
                 if dist > float(ref_threshold):
-                    # up to +50% gain if сильно уехали
+                    # up to +50% gain if distance exceeds the reference threshold
                     gate = 1.0 + min(0.5, (dist - float(ref_threshold)) * 4.0)
                     m = m * gate
             except Exception:
@@ -919,6 +919,21 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
     # Spectral switching/adaptive low state
     spec_state = {"ema": None, "mode": "CFGZeroFD"}
 
+    # External reset hook to emulate fresh state per iteration without re-cloning the model
+    def _mg_guidance_reset():
+        try:
+            prev_delta["t"] = None
+            sigma_seen["max"] = None
+            sigma_seen["min"] = None
+            spec_state["ema"] = None
+            spec_state["mode"] = "CFGZeroFD"
+        except Exception:
+            pass
+    try:
+        setattr(m, "mg_guidance_reset", _mg_guidance_reset)
+    except Exception:
+        pass
+
     def cfg_func(args):
         cond = args["cond"]
         uncond = args["uncond"]
@@ -1580,14 +1595,14 @@ class ComfyAdaptiveDetailEnhancer25:
                     mask_last = pre_mask
                     om = pre_mask.movedim(-1, 1)
                     pre_area = float(om.mean().item())
-                    # One-time gentle damping from area
-                    try:
-                        if pre_area > 0.005:
-                            damp = 1.0 - min(0.10, 0.02 + pre_area * 0.08)
-                            current_denoise = max(0.10, current_denoise * damp)
-                            current_cfg = max(1.0, current_cfg * (1.0 - 0.005))
-                    except Exception:
-                        pass
+                    # One-time gentle damping from area (disabled to preserve outline precision)
+                    # try:
+                    #     if pre_area > 0.005:
+                    #         damp = 1.0 - min(0.10, 0.02 + pre_area * 0.08)
+                    #         current_denoise = max(0.10, current_denoise * damp)
+                    #         current_cfg = max(1.0, current_cfg * (1.0 - 0.005))
+                    # except Exception:
+                    #     pass
                 # Compact status
                 try:
                     clipseg_status = "on" if bool(clipseg_enable) and isinstance(clipseg_text, str) and clipseg_text.strip() != "" else "off"
@@ -1600,6 +1615,19 @@ class ComfyAdaptiveDetailEnhancer25:
                 clipseg_enable = False
                 # Depth gate cache for micro-detail injection (reuse per resolution)
                 depth_gate_cache = {"size": None, "mask": None}
+                # Prepare guided sampler once per node run to avoid cloning model each iteration
+                sampler_model = _wrap_model_with_guidance(
+                      model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
+                      use_zero_init=bool(use_zero_init), zero_init_steps=int(zero_init_steps),
+                      fdg_low=float(fdg_low), fdg_high=float(fdg_high), fdg_sigma=float(fdg_sigma),
+                      midfreq_enable=bool(False), midfreq_gain=float(0.0), midfreq_sigma_lo=float(0.8), midfreq_sigma_hi=float(2.0),
+                      ze_zero_steps=int(ze_res_zero_steps),
+                      ze_adaptive=bool(ze_adaptive), ze_r_switch_hi=float(ze_r_switch_hi), ze_r_switch_lo=float(ze_r_switch_lo),
+                      fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
+                      use_local_mask=False, mask_inside=1.0, mask_outside=1.0,
+                      mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
+                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
+                  )
                 # early interruption check before starting the loop
                 try:
                     model_management.throw_exception_if_processing_interrupted()
@@ -1612,6 +1640,13 @@ class ComfyAdaptiveDetailEnhancer25:
                     model_management.throw_exception_if_processing_interrupted()
                     if i % 2 == 0:
                         clear_gpu_and_ram_cache()
+
+                    # Reset guidance internal state so each iteration starts clean
+                    try:
+                        if hasattr(sampler_model, "mg_guidance_reset"):
+                            sampler_model.mg_guidance_reset()
+                    except Exception:
+                        pass
 
                     prev_samples = current_latent["samples"].clone().detach()
 
@@ -1661,18 +1696,8 @@ class ComfyAdaptiveDetailEnhancer25:
                     except Exception:
                         pass
 
-                    # Guidance override via cfg_func when requested
-                    sampler_model = _wrap_model_with_guidance(
-                          model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
-                          use_zero_init=bool(use_zero_init), zero_init_steps=int(zero_init_steps),
-                          fdg_low=float(fdg_low), fdg_high=float(fdg_high), fdg_sigma=float(fdg_sigma),
-                          midfreq_enable=bool(False), midfreq_gain=float(0.0), midfreq_sigma_lo=float(0.8), midfreq_sigma_hi=float(2.0),
-                          ze_zero_steps=int(ze_res_zero_steps),
-                          ze_adaptive=bool(ze_adaptive), ze_r_switch_hi=float(ze_r_switch_hi), ze_r_switch_lo=float(ze_r_switch_lo),
-                          fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
-                          mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
-                          eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
-                      )
+                    # Sampler model prepared once above; reuse it here (no-op assignment)
+                    sampler_model = sampler_model
 
                     if str(scheduler) == "MGHybrid":
                         try:
@@ -1919,6 +1944,12 @@ class ComfyAdaptiveDetailEnhancer25:
             # Always disable NAG patch and clear local mask, even on errors
             try:
                 sa_patch.enable_crossattention_nag_patch(False)
+            except Exception:
+                pass
+            # Turn off attention-entropy probe to avoid holding last maps
+            try:
+                if hasattr(sa_patch, "enable_attention_entropy_capture"):
+                    sa_patch.enable_attention_entropy_capture(False)
             except Exception:
                 pass
             try:
