@@ -230,7 +230,7 @@ Depth models (Depth Anything v2)
 ## MG_CleanUp (final memory cleanup node)
 
 - Purpose: a tiny end-of-graph node that aggressively frees RAM/VRAM and asks the OS to return freed pages. Place it at the very end of a workflow (ideally right after SaveImage).
-- Returns: passthrough `LATENT` and a small `IMAGE` preview (32×32). Works even if you do not wire model/conditioning — cleanup still runs.
+- Returns: passthrough `LATENT` and a small `IMAGE` preview (32×32). For the cleanup to work, be sure to connect the `Preview` node to the `IMAGE` output.
 - What it does (two passes: immediate and +150 ms):
   - CUDA sync, `gc.collect()`, `torch.cuda.empty_cache()` + `ipc_collect()`
   - Comfy model manager soft cache drop; when `hard_trim=true` also unloads loaded models (will reload on next run)
