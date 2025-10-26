@@ -68,8 +68,7 @@ Photo Dog
   - Disabling hi-res depth/edges (ControlFusion) reduces peaks. (not recommended!)
   - Depth weights add a bit of RAM on load; models live under `depth-anything/`.
 
-## 💥 Memory and ComfyUI
-- !!!!!!!During VAE tiling at ultra-high resolutions, more than those that fit into the memory of your video card, some of the processes stick in RAM. These are the nuance of ComfyUI, just restart ComfyUI. For my part, I clear everything that can be cleared from RAM and VRAM.!!!!!! 
+## 💥 Memory
 - At each step, the image is upscaled from the previous step! Keep this in mind, the final image may not fit into your PC's memory if the starting latency is high.
  
 
