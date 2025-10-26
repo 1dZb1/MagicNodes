@@ -66,7 +66,12 @@ Photo Dog
 - Notes
   - Lowering the starting latent (e.g., 512x768) or lower, reduces both VRAM and RAM.
   - Disabling hi-res depth/edges (ControlFusion) reduces peaks. (not recommended!)
-  - Depth weights add a bit of RAM on load; models live under `depth-anything/`. 
+  - Depth weights add a bit of RAM on load; models live under `depth-anything/`.
+
+## 💥 Memory and ComfyUI
+- !!!!!!!During VAE tiling at ultra-high resolutions, more than those that fit into the memory of your video card, some of the processes stick in RAM. These are the nuance of ComfyUI, just restart ComfyUI. For my part, I clear everything that can be cleared from RAM and VRAM.!!!!!! 
+- At each step, the image is upscaled from the previous step! Keep this in mind, the final image may not fit into your PC's memory if the starting latency is high.
+ 
 
 
 ## Install (ComfyUI 0.3.60, tested on this version)
@@ -89,7 +94,7 @@ Folder `workflows/` contains ready-to-use graphs:
 You can save this workflow to ComfyUI `ComfyUI\user\default\workflows`
 6. Restart ComfyUI. Nodes appear under the "MagicNodes" categories.
 
-💥 I strongly recommend use `mg_Easy-Workflow` workflow + default settings + your model and my negative LoRA `mg_7lambda_negative.safetensors`, for best result.
+I strongly recommend use `mg_Easy-Workflow` workflow + default settings + your model and my negative LoRA `mg_7lambda_negative.safetensors`, for best result.
 
 
 ## 🚀 "One-Node" Quickstart (MG_SuperSimple)
@@ -104,6 +109,7 @@ Notes:
 - When "Custom" is off, presets fully drive parameters
 - When "Custom" is on, the visible CADE controls override the Step presets across all steps; Step 1 still enforces `denoise=1.0`
 - CLIP Vision (if connected) is applied from Step 2 onward; if no reference image is provided, SuperSimple uses the previous step image as reference
+- Step 1 and Step 2 it's a prewarming step.
 
 ## ❗Tips
 (!) There are almost always artifacts in the first step, don't pay attention to them, they will be removed in the next steps. Keep your prompt clean and logical, don't duplicate details and be careful with symbols.
@@ -139,7 +145,6 @@ Notes:
 14) SmartSeed (auto seed pick): set `seed = 0` in Easy or SuperSimple. The node will sample several candidate seeds and do a quick low‑step probe to choose a balanced one. You’ll see logs `Smart_seed_random: Start` and `Smart_seed_random: End. Seed is: <number>`. Use any non‑zero seed for fully deterministic runs.
 
 15) The 4th step sometimes saves the image for a long time, just wait for the end of the process, it depends on the initial resolution you set.
-
 
 
 ## Repository Layout

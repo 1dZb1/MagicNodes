@@ -156,7 +156,41 @@ def _clipseg_build_mask(image_bhwc: torch.Tensor,
             except Exception:
                 pass
         m = (m * float(max(0.0, gain))).clamp(0, 1)
-        return m.unsqueeze(0).unsqueeze(-1)  # BHWC with B=1,C=1
+        out_mask = m.unsqueeze(0).unsqueeze(-1)  # BHWC with B=1,C=1
+        # Best-effort release of temporaries to reduce RAM peak
+        try:
+            del inputs
+        except Exception:
+            pass
+        try:
+            del outputs
+        except Exception:
+            pass
+        try:
+            del logits
+        except Exception:
+            pass
+        try:
+            del prob
+        except Exception:
+            pass
+        try:
+            del pil_img
+        except Exception:
+            pass
+        try:
+            del arr
+        except Exception:
+            pass
+        try:
+            del x
+        except Exception:
+            pass
+        try:
+            del img
+        except Exception:
+            pass
+        return out_mask
     except Exception as e:
         if not globals().get("_CLIPSEG_WARNED", False):
             print(f"[CADE2.5][CLIPSeg] mask failed: {e}")
@@ -723,12 +757,42 @@ def _scheduler_names():
 
 
 def safe_decode(vae, lat, tile=512, ovlp=64):
-    h, w = lat["samples"].shape[-2:]
-    if min(h, w) > 1024:
-        # Increase overlap for ultra-hires to reduce seam artifacts
-        ov = 128 if max(h, w) > 2048 else ovlp
-        return vae.decode_tiled(lat["samples"], tile_x=tile, tile_y=tile, overlap=ov)
-    return vae.decode(lat["samples"])
+    # Avoid building autograd graphs and release GPU memory early
+    with torch.inference_mode():
+        h, w = lat["samples"].shape[-2:]
+        if min(h, w) > 1024:
+            # Increase overlap for ultra-hires to reduce seam artifacts
+            ov = 128 if max(h, w) > 2048 else ovlp
+            out = vae.decode_tiled(lat["samples"], tile_x=tile, tile_y=tile, overlap=ov)
+        else:
+            out = vae.decode(lat["samples"])
+    # Move to CPU and free VRAM ASAP
+    try:
+        try:
+            out = out.detach()
+        except Exception:
+            pass
+        out_cpu = out
+        try:
+            out_cpu = out_cpu.to('cpu')
+        except Exception:
+            pass
+        try:
+            del out
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        return out_cpu
+    except Exception:
+        return out
 
 
 def safe_encode(vae, img, tile=512, ovlp=64):
@@ -1456,6 +1520,10 @@ class ComfyAdaptiveDetailEnhancer25:
                 "clipseg_blend": (["fuse", "replace", "intersect"], {"default": "fuse", "tooltip": "How to combine CLIPSeg with any pre-mask (if present)."}),
                 "clipseg_ref_gate": ("BOOLEAN", {"default": False, "tooltip": "If reference provided, boost mask when far from reference (CLIP-Vision)."}),
                 "clipseg_ref_threshold": ("FLOAT", {"default": 0.03, "min": 0.0, "max": 0.2, "step": 0.001}),
+                # Under-the-hood saving (disabled by default)
+                "auto_save": ("BOOLEAN", {"default": False, "tooltip": "Save final IMAGE directly from CADE (uses low PNG compress to reduce RAM)."}),
+                "save_prefix": ("STRING", {"default": "ComfyUI", "multiline": False}),
+                "save_compress": ("INT", {"default": 1, "min": 0, "max": 9, "step": 1}),
 
                 # Polish mode (final hi-res refinement)
                 "polish_enable": ("BOOLEAN", {"default": False, "tooltip": "Polish: keep low-frequency shape from reference while allowing high-frequency details to refine."}),
@@ -1493,8 +1561,9 @@ class ComfyAdaptiveDetailEnhancer25:
                      clipseg_threshold=0.40, clipseg_blur=7.0, clipseg_dilate=4,
                      clipseg_gain=1.0, clipseg_blend="fuse", clipseg_ref_gate=False, clipseg_ref_threshold=0.03,
                      polish_enable=False, polish_keep_low=0.4, polish_edge_lock=0.2, polish_sigma=1.0,
-                     polish_start_after=1, polish_keep_low_ramp=0.2,
-                     kv_prune_enable=False, kv_keep=0.85, kv_min_tokens=128):
+                      polish_start_after=1, polish_keep_low_ramp=0.2,
+                      auto_save=False, save_prefix="ComfyUI", save_compress=1,
+                      kv_prune_enable=False, kv_keep=0.85, kv_min_tokens=128):
         # Hard reset of any sticky globals from prior runs
         try:
             global CURRENT_ONNX_MASK_BCHW
@@ -1615,6 +1684,23 @@ class ComfyAdaptiveDetailEnhancer25:
                 clipseg_enable = False
                 # Depth gate cache for micro-detail injection (reuse per resolution)
                 depth_gate_cache = {"size": None, "mask": None}
+                # Release preflight temporaries to avoid keeping big tensors alive
+                try:
+                    del cmask
+                except Exception:
+                    pass
+                try:
+                    del om
+                except Exception:
+                    pass
+                try:
+                    del pre_mask
+                except Exception:
+                    pass
+                try:
+                    del image
+                except Exception:
+                    pass
                 # Prepare guided sampler once per node run to avoid cloning model each iteration
                 sampler_model = _wrap_model_with_guidance(
                       model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
@@ -1665,7 +1751,11 @@ class ComfyAdaptiveDetailEnhancer25:
                             device='cpu',
                             generator=gen,
                         ).to(current_latent["samples"].device)
-                        current_latent["samples"] += (noise_offset * fade) * eps
+                        current_latent["samples"] = current_latent["samples"] + (noise_offset * fade) * eps
+                        try:
+                            del eps
+                        except Exception:
+                            pass
 
                     # ONNX pre-sampling detectors removed
 
@@ -1693,6 +1783,23 @@ class ComfyAdaptiveDetailEnhancer25:
                                     current_denoise = max(0.10, current_denoise * damp)
                                     current_cfg = max(1.0, current_cfg * (1.0 - 0.005))
                                 # No local guidance toggles here; keep optional mask hook clear
+                    except Exception:
+                        pass
+                    # release heavy temporaries from CLIPSeg path
+                    try:
+                        del img_prev2
+                    except Exception:
+                        pass
+                    try:
+                        del cmask
+                    except Exception:
+                        pass
+                    try:
+                        del fused
+                    except Exception:
+                        pass
+                    try:
+                        del om
                     except Exception:
                         pass
 
@@ -1749,6 +1856,31 @@ class ComfyAdaptiveDetailEnhancer25:
 
                     # cooperative cancel right after sampling, before further heavy work
                     model_management.throw_exception_if_processing_interrupted()
+                    # release sampler temporaries (best-effort)
+                    try:
+                        del lat_img
+                    except Exception:
+                        pass
+                    try:
+                        del noise
+                    except Exception:
+                        pass
+                    try:
+                        del noise_mask
+                    except Exception:
+                        pass
+                    try:
+                        del callback
+                    except Exception:
+                        pass
+                    try:
+                        del sampler_obj
+                    except Exception:
+                        pass
+                    try:
+                        del sigmas
+                    except Exception:
+                        pass
 
                     if bool(latent_compare):
                         _cur = current_latent["samples"]
@@ -1769,6 +1901,10 @@ class ComfyAdaptiveDetailEnhancer25:
                             current_denoise = max(0.20, current_denoise * damp)
                             cfg_damp = 0.997 if damp > 0.9 else 0.99
                             current_cfg = max(1.0, current_cfg * cfg_damp)
+                    try:
+                        del prev_samples
+                    except Exception:
+                        pass
 
                     # AQClip-Lite: adaptive soft clipping in latent space (before decode)
                     try:
@@ -1790,6 +1926,14 @@ class ComfyAdaptiveDetailEnhancer25:
                                 H_override=H_override,
                             )
                             current_latent["samples"] = z_new
+                            try:
+                                del H_override
+                            except Exception:
+                                pass
+                            try:
+                                del Hm
+                            except Exception:
+                                pass
                     except Exception:
                         pass
 
@@ -1880,6 +2024,35 @@ class ComfyAdaptiveDetailEnhancer25:
                             # Feed back to latent for next steps
                             current_latent = {"samples": safe_encode(vae, img2)}
                             image = img2
+                            # best-effort release of large temporaries
+                            try:
+                                del x
+                                del r
+                                del low_x
+                                del low_r
+                                del high_x
+                                del low_mix
+                                del new
+                                del micro
+                                del gray
+                                del sobel_x
+                                del sobel_y
+                                del gx
+                                del gy
+                                del mag
+                                del m_edge
+                                del g_edge
+                                del g_depth
+                                del g
+                                del ref_n
+                                del ref
+                                del img
+                            except Exception:
+                                pass
+                            try:
+                                clear_gpu_and_ram_cache()
+                            except Exception:
+                                pass
                         except Exception:
                             pass
 
@@ -1986,6 +2159,31 @@ class ComfyAdaptiveDetailEnhancer25:
         # Final pass: remove isolated hot whites ("fireflies") without touching real edges/highlights
         try:
             image = _despeckle_fireflies(image, thr=0.998, max_iso=4.0/9.0, grad_gate=0.15)
+        except Exception:
+            pass
+
+        # Under-the-hood preview downscale for UI/output IMAGE to cap RAM during save/preview
+        try:
+            B, H, W, C = image.shape
+            max_side = max(int(H), int(W))
+            cap = 4096
+            if max_side > cap:
+                scale = float(cap) / float(max_side)
+                nh = max(1, int(round(H * scale)))
+                nw = max(1, int(round(W * scale)))
+                x = image.movedim(-1, 1)
+                x = F.interpolate(x, size=(nh, nw), mode='bilinear', align_corners=False)
+                image = x.movedim(1, -1).clamp(0, 1).to(dtype=image.dtype)
+        except Exception:
+            pass
+
+        # Optional: save from node with low PNG compress to reduce RAM spike; ignore UI wiring
+        try:
+            if bool(auto_save):
+                from comfy_api.latest._ui import ImageSaveHelper, FolderType
+                _ = ImageSaveHelper.save_images(
+                    [image], filename_prefix=str(save_prefix), folder_type=FolderType.output,
+                    cls=ComfyAdaptiveDetailEnhancer25, compress_level=int(save_compress))
         except Exception:
             pass
 
