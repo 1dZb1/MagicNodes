@@ -1998,6 +1998,8 @@ class ComfyAdaptiveDetailEnhancer25:
                 "clipseg_blend": (["fuse", "replace", "intersect"], {"default": "fuse", "tooltip": "How to combine CLIPSeg with ONNX mask."}),
                 "clipseg_ref_gate": ("BOOLEAN", {"default": False, "tooltip": "If reference provided, boost mask when far from reference (CLIP-Vision)."}),
                 "clipseg_ref_threshold": ("FLOAT", {"default": 0.03, "min": 0.0, "max": 0.2, "step": 0.001}),
+                # Preview/output image cap (helps RAM during save/preview)
+                "preview_downscale": ("BOOLEAN", {"default": True, "tooltip": "Cap final IMAGE to max 1920 on the longer side to reduce RAM spike during save/preview. Disable for full-res output."}),
                 # Under-the-hood saving (disabled by default to avoid duplicate saves)
                 "auto_save": ("BOOLEAN", {"default": False, "tooltip": "Save final IMAGE directly from CADE (uses low PNG compress to reduce RAM)."}),
                 "save_prefix": ("STRING", {"default": "ComfyUI", "multiline": False}),
@@ -2040,9 +2042,10 @@ class ComfyAdaptiveDetailEnhancer25:
                      clipseg_enable=False, clipseg_text="", clipseg_preview=224,
                      clipseg_threshold=0.40, clipseg_blur=7.0, clipseg_dilate=4,
                      clipseg_gain=1.0, clipseg_blend="fuse", clipseg_ref_gate=False, clipseg_ref_threshold=0.03,
-                    polish_enable=False, polish_keep_low=0.4, polish_edge_lock=0.2, polish_sigma=1.0,
-                   polish_start_after=1, polish_keep_low_ramp=0.2,
-                    auto_save=False, save_prefix="ComfyUI", save_compress=1,
+                     polish_enable=False, polish_keep_low=0.4, polish_edge_lock=0.2, polish_sigma=1.0,
+                    polish_start_after=1, polish_keep_low_ramp=0.2,
+                     preview_downscale=False,
+                     auto_save=False, save_prefix="ComfyUI", save_compress=1,
                      preset_step="Step 1", custom_override=False):
         # Cooperative cancel before any heavy work
         model_management.throw_exception_if_processing_interrupted()
@@ -3015,17 +3018,19 @@ class ComfyAdaptiveDetailEnhancer25:
             pass
 
         # Under-the-hood preview downscale for UI/output IMAGE to cap RAM during save/preview
+        preview_downscale = False  # hard-coded default (can be toggled here if needed)
         try:
-            B, H, W, C = image.shape
-            max_side = max(int(H), int(W))
-            cap = 4096
-            if max_side > cap:
-                scale = float(cap) / float(max_side)
-                nh = max(1, int(round(H * scale)))
-                nw = max(1, int(round(W * scale)))
-                x = image.movedim(-1, 1)
-                x = F.interpolate(x, size=(nh, nw), mode='bilinear', align_corners=False)
-                image = x.movedim(1, -1).clamp(0, 1).to(dtype=image.dtype)
+            if bool(preview_downscale):
+                B, H, W, C = image.shape
+                max_side = max(int(H), int(W))
+                cap = 1920
+                if max_side > cap:
+                    scale = float(cap) / float(max_side)
+                    nh = max(1, int(round(H * scale)))
+                    nw = max(1, int(round(W * scale)))
+                    x = image.movedim(-1, 1)
+                    x = F.interpolate(x, size=(nh, nw), mode='bilinear', align_corners=False)
+                    image = x.movedim(1, -1).clamp(0, 1).to(dtype=image.dtype)
         except Exception:
             pass
 

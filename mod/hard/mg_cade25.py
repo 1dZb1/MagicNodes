@@ -1498,6 +1498,12 @@ class ComfyAdaptiveDetailEnhancer25:
                 "fdg_low_max": ("FLOAT", {"default": 0.70, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Upper bound for adaptive fdg_low."}),
                 "fdg_ema_beta": ("FLOAT", {"default": 0.80, "min": 0.0, "max": 0.99, "step": 0.01, "tooltip": "EMA smoothing for spectral ratio (higher = smoother)."}),
 
+                # Mid-frequency stabilizer (hands/objects scale)
+                "midfreq_enable": ("BOOLEAN", {"default": True, "tooltip": "Enable mid-frequency stabilizer (band-pass) to keep hands/objects stable at hi-res."}),
+                "midfreq_gain": ("FLOAT", {"default": 0.65, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Blend amount of mid-frequency band added on top of FDG guidance (0..2)."}),
+                "midfreq_sigma_lo": ("FLOAT", {"default": 0.55, "min": 0.05, "max": 2.0, "step": 0.01, "tooltip": "Lower Gaussian sigma for band split (controls smaller forms)."}),
+                "midfreq_sigma_hi": ("FLOAT", {"default": 1.30, "min": 0.10, "max": 3.0, "step": 0.01, "tooltip": "Upper Gaussian sigma for band split (controls larger forms)."}),
+
                 # ONNX local guidance and keypoints removed
 
                 # Muse Blend global directional post-mix
@@ -1555,6 +1561,7 @@ class ComfyAdaptiveDetailEnhancer25:
                      fdg_low=0.6, fdg_high=1.3, fdg_sigma=1.0, ze_res_zero_steps=2,
                      ze_adaptive=False, ze_r_switch_hi=0.60, ze_r_switch_lo=0.45,
                      fdg_low_adaptive=False, fdg_low_min=0.45, fdg_low_max=0.70, fdg_ema_beta=0.80,
+                     midfreq_enable=True, midfreq_gain=0.65, midfreq_sigma_lo=0.55, midfreq_sigma_hi=1.30,
                      muse_blend=False, muse_blend_strength=0.5,
                      eps_scale_enable=False, eps_scale=0.005,
                      clipseg_enable=False, clipseg_text="", clipseg_preview=224,
@@ -1706,7 +1713,7 @@ class ComfyAdaptiveDetailEnhancer25:
                       model, guidance_mode, rescale_multiplier, momentum_beta, cfg_curve, perp_damp,
                       use_zero_init=bool(use_zero_init), zero_init_steps=int(zero_init_steps),
                       fdg_low=float(fdg_low), fdg_high=float(fdg_high), fdg_sigma=float(fdg_sigma),
-                      midfreq_enable=bool(False), midfreq_gain=float(0.0), midfreq_sigma_lo=float(0.8), midfreq_sigma_hi=float(2.0),
+                      midfreq_enable=bool(midfreq_enable), midfreq_gain=float(midfreq_gain), midfreq_sigma_lo=float(midfreq_sigma_lo), midfreq_sigma_hi=float(midfreq_sigma_hi),
                       ze_zero_steps=int(ze_res_zero_steps),
                       ze_adaptive=bool(ze_adaptive), ze_r_switch_hi=float(ze_r_switch_hi), ze_r_switch_lo=float(ze_r_switch_lo),
                       fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),

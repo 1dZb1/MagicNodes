@@ -100,7 +100,7 @@ I strongly recommend use `mg_Easy-Workflow` workflow + default settings + your m
 Start with `MG_SuperSimple` for the easiest path:
 1. Drop `MG_SuperSimple` into the graph
 2. Connect `model / positive / negative / vae / latent` and a `Load ControlNet Model` module
-3. Choose `step_count` (2/3/4) and Run
+3. Choose `step_count` (3/4) and Run
 
 or load `mg_SuperSimple-Workflow` in panel ComfyUI
 
@@ -145,6 +145,11 @@ Notes:
 
 15) The 4th step sometimes saves the image for a long time, just wait for the end of the process, it depends on the initial resolution you set.
 
+16) The `CombiNode` node is optional, you can replace it with standard ComfyUI pipelines.
+
+<br></br>
+<details>
+<summary>Repository Layout</summary>
 
 ## Repository Layout
 ```
@@ -180,7 +185,7 @@ MagicNodes/
 │  ├─ mg_combinode.py
 │  ├─ mg_latent_adapter.py
 │  ├─ mg_sagpu_attention.py
-│  └─  mg_seed_latent.py
+│  └─ mg_seed_latent.py
 │  
 ├─ pressets/
 │  ├─ mg_cade25.cfg
@@ -191,7 +196,7 @@ MagicNodes/
 │  └─ check_sageattention.ps1
 │ 
 ├─ depth-anything/              # place Depth Anything v2 weights (.pth), e.g., depth_anything_v2_vitl.pth
-│  └─depth_anything_v2_vitl.pth
+│  └─ depth_anything_v2_vitl.pth
 │ 
 ├─ vendor/
 │  └─ depth_anything_v2/        # vendored Depth Anything v2 code (Apache-2.0)
@@ -203,20 +208,11 @@ MagicNodes/
 └─ requirements.txt
 ```
 
-Depth models (Depth Anything v2)
-- Place DA v2 weights (`.pth`) in `depth-anything/`. Recommended: `depth_anything_v2_vitl.pth` (ViT-L). Supported names include:
-  `depth_anything_v2_vits.pth`, `depth_anything_v2_vitb.pth`, `depth_anything_v2_vitl.pth`, `depth_anything_v2_vitg.pth`,
-  and the metric variants `depth_anything_v2_metric_vkitti_vitl.pth`, `depth_anything_v2_metric_hypersim_vitl.pth`.
-- ControlFusion auto-detects the correct config from the filename and uses this path by default. You can override via the
-  `depth_model_path` parameter (preset) if needed.
-- If no weights are found, ControlFusion falls back gracefully (luminance pseudo-depth), but results are better with DA v2.
-- Where to get weights: see the official Depth Anything v2 repository (https://github.com/DepthAnything/Depth-Anything-V2)
-  and its Hugging Face models page (https://huggingface.co/Depth-Anything) for pre-trained `.pth` files.
-
-
-## Documentation
-- Easy nodes overview and `MG_SuperSimple`: `docs/EasyNodes.md`
-- Hard nodes documentation index: `docs/HardNodes.md`
+</details>
+<br></br>
+<details>
+<summary> Module Notes and Guides</summary>
+<p>A compact set of per‑module notes, knobs, and usage tips covering Control Fusion, CADE 2.5, MG_CleanUp, and the experimental Magic Latent Adapter.</p>
 
 ## Control Fusion (mg_controlfusion.py, mg_controlfusion_easy.py,)
 - Builds depth + edge masks with preserved aspect ratio; hires-friendly mask mode
@@ -230,6 +226,7 @@ Depth models (Depth Anything v2)
   - `polish_enable`, `polish_keep_low` (global form from reference), `polish_edge_lock`, `polish_sigma`
   - Smooth start via `polish_start_after` and `polish_keep_low_ramp`
 - `eps_scale` supported for gentle exposure shaping
+
 
 ## MG_CleanUp (final memory cleanup node)
 
@@ -255,6 +252,16 @@ Notes:
 ## Depth Anything v2 (vendor)
 - Lives under `vendor/depth_anything_v2`; Apache-2.0 license
 
+Depth models (Depth Anything v2)
+- Place DA v2 weights (`.pth`) in `depth-anything/`. Recommended: `depth_anything_v2_vitl.pth` (ViT-L). Supported names include:
+  `depth_anything_v2_vits.pth`, `depth_anything_v2_vitb.pth`, `depth_anything_v2_vitl.pth`, `depth_anything_v2_vitg.pth`,
+  and the metric variants `depth_anything_v2_metric_vkitti_vitl.pth`, `depth_anything_v2_metric_hypersim_vitl.pth`.
+- ControlFusion auto-detects the correct config from the filename and uses this path by default. You can override via the
+  `depth_model_path` parameter (preset) if needed.
+- If no weights are found, ControlFusion falls back gracefully (luminance pseudo-depth), but results are better with DA v2.
+- Where to get weights: see the official Depth Anything v2 repository (https://github.com/DepthAnything/Depth-Anything-V2)
+  and its Hugging Face models page (https://huggingface.co/Depth-Anything) for pre-trained `.pth` files.
+
 ## MG_ZeSmartSampler (Experimental)
 - Custom sampler that builds hybrid sigma schedules (Karras/Beta blend) with tail smoothing
 - Inputs/Outputs match KSampler: `MODEL/SEED/STEPS/CFG/base_sampler/schedule/CONDITIONING/LATENT` -> `LATENT`
@@ -279,6 +286,13 @@ Notes:
 - Experimental: added to ease early, experimental support for FLUX/Qwen‑like models by reducing shape/dimension friction. Still evolving; treat as opt‑in.
 - Usage: place before CADE/your sampler. In `generate` mode you can also enable image mixing via VAE; in `adapt` mode feed any upstream `LATENT` and the current `MODEL`. A simple family switch (`auto / SD / SDXL / FLUX`) controls stride fallback when VAE isn’t provided.
 - Notes: quality with FLUX/Qwen models also depends on using the proper text encoders/conditioning nodes for those families; this adapter only solves latent shapes, not conditioning mismatches.
+
+</details>
+<br></br>
+
+## Documentation
+- Easy nodes overview and `MG_SuperSimple`: `docs/EasyNodes.md`
+- Hard nodes documentation index: `docs/HardNodes.md`
 
 ## Dependencies (Why These Packages)
 - transformers — used by CADE for CLIPSeg (CIDAS/clipseg-rd64-refined) to build text‑driven masks (e.g., face/hands). If missing, CLIPSeg is disabled gracefully.
