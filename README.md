@@ -61,7 +61,7 @@ Photo Dog
 - CADE2.5 pipeline does not just upscale the image, it iterates and adds small details, doing it carefully, at every stage.
 
 ## Hardware
-- The pipeline is designed for good hardware (tested on RTX5090 (32Gb) and RAM 128Gb), try to keep the starting latency very small, because there is an upscale at the steps and you risk getting errors if you push up the starting values.
+- The pipeline is designed for good hardware (tested on RTX5090 (32Gb) and RAM 128Gb), try to keep the starting latent very small, because there is an upscale at the steps and you risk getting errors if you push up the starting values.
 - start latent ~ 672x944 -> final ~ 3688x5192 across 4 steps.
 - Notes
   - Lowering the starting latent (e.g., 512x768) or lower, reduces both VRAM and RAM.
@@ -69,7 +69,7 @@ Photo Dog
   - Depth weights add a bit of RAM on load; models live under `depth-anything/`.
 
 ## 💥 Memory
-- At each step, the image is upscaled from the previous step! Keep this in mind, the final image may not fit into your PC's memory if the starting latency is high.
+- At each step, the image is upscaled from the previous step! Keep this in mind, the final image may not fit into your PC's memory if the starting latent is high.
  
 
 
