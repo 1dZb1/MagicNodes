@@ -2065,6 +2065,8 @@ class ComfyAdaptiveDetailEnhancer25:
         sampler_name = str(pv("sampler_name", sampler_name, top=True))
         scheduler = str(pv("scheduler", scheduler, top=True))
         iterations = int(pv("iterations", iterations))
+        # Smart-seed per-step toggle (defaults to True if not present in preset)
+        smart_seed_enable = bool(pv("smart_seed_enable", True))
         steps_delta = float(pv("steps_delta", steps_delta))
         cfg_delta = float(pv("cfg_delta", cfg_delta))
         denoise_delta = float(pv("denoise_delta", denoise_delta))
@@ -2190,11 +2192,13 @@ class ComfyAdaptiveDetailEnhancer25:
 
         # Smart seed selection (Sobol + light probing) when effective seed==0 and not in custom override mode
         try:
-            if int(seed) == 0 and not bool(custom_override):
+            if int(seed) == 0 and not bool(custom_override) and bool(smart_seed_enable):
                 seed = _smart_seed_select(
                     model, vae, positive, negative, current_latent,
                     str(sampler_name), str(scheduler), float(current_cfg), float(current_denoise),
                     base_seed=0, step_tag=step_tag,
+                    # Reduce candidate count and probe cost for Easy UI
+                    k=3, probe_steps=3,
                     clip_vision=clip_vision, reference_image=reference_image, clipseg_text=str(clipseg_text))
         except Exception as e:
             # propagate user cancel; swallow only non-interrupt errors
