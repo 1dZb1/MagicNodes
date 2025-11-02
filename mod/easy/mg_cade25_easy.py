@@ -1378,6 +1378,73 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             except Exception:
                 return None
 
+        # Compute effective cond scale before any branch, so schedules apply in all modes
+        cond_scale_eff = cond_scale
+        curve_gain = 1.0
+        if cfg_curve > 0.0 and (sigma is not None):
+            s = sigma
+            if s.ndim > 1:
+                s = s.flatten()
+            s_max = float(torch.max(s).item())
+            s_min = float(torch.min(s).item())
+            if sigma_seen["max"] is None:
+                sigma_seen["max"] = s_max
+                sigma_seen["min"] = s_min
+            else:
+                sigma_seen["max"] = max(sigma_seen["max"], s_max)
+                sigma_seen["min"] = min(sigma_seen["min"], s_min)
+            lo = max(1e-6, sigma_seen["min"])
+            hi = max(lo * (1.0 + 1e-6), sigma_seen["max"])
+            t = (torch.log(s + 1e-6) - torch.log(torch.tensor(lo, device=sigma.device))) / (torch.log(torch.tensor(hi, device=sigma.device)) - torch.log(torch.tensor(lo, device=sigma.device)) + 1e-6)
+            t = t.clamp(0.0, 1.0)
+            k = 6.0 * float(cfg_curve)
+            s_curve = torch.tanh((t - 0.5) * k)
+            g = 1.0 + 0.15 * float(cfg_curve) * s_curve
+            if g.ndim > 0:
+                g = g.mean().item()
+            curve_gain = float(g)
+            cond_scale_eff = cond_scale * curve_gain
+
+        if isinstance(cfg_sched_type, str) and cfg_sched_type.lower() != "off" and (sigma is not None):
+            try:
+                s = sigma
+                if s.ndim > 1:
+                    s = s.flatten()
+                s_max = float(torch.max(s).item())
+                s_min = float(torch.min(s).item())
+                if sigma_seen["max"] is None:
+                    sigma_seen["max"] = s_max
+                    sigma_seen["min"] = s_min
+                else:
+                    sigma_seen["max"] = max(sigma_seen["max"], s_max)
+                    sigma_seen["min"] = min(sigma_seen["min"], s_min)
+                lo = max(1e-6, sigma_seen["min"])
+                hi = max(lo * (1.0 + 1e-6), sigma_seen["max"])
+                t = (torch.log(s + 1e-6) - torch.log(torch.tensor(lo, device=sigma.device))) / (torch.log(torch.tensor(hi, device=sigma.device)) - torch.log(torch.tensor(lo, device=sigma.device)) + 1e-6)
+                t = t.clamp(0.0, 1.0)
+                if t.ndim > 0:
+                    t_val = float(t.mean().item())
+                else:
+                    t_val = float(t.item())
+                cmin = float(max(0.0, cfg_sched_min))
+                cmax = float(max(cmin, cfg_sched_max))
+                tp = cfg_sched_type.lower()
+                if tp == "cosine":
+                    import math
+                    cfg_val = cmax - (cmax - cmin) * 0.5 * (1.0 + math.cos(math.pi * t_val))
+                elif tp in ("warmup", "warm-up", "linear"):
+                    g = float(max(0.0, min(1.0, t_val))) ** float(max(0.1, cfg_sched_gamma))
+                    cfg_val = cmin + (cmax - cmin) * g
+                elif tp in ("u", "u-shape", "ushape"):
+                    e = 4.0 * (t_val - 0.5) * (t_val - 0.5)
+                    e = float(min(1.0, max(0.0, e)))
+                    e = e ** float(max(0.1, cfg_sched_u_pow))
+                    cfg_val = cmin + (cmax - cmin) * e
+                else:
+                    cfg_val = cond_scale_eff
+                cond_scale_eff = float(cfg_val) * float(curve_gain)
+            except Exception:
+                pass
         # Allow hybrid switch per-step
         mode = guidance_mode
         if guidance_mode == "ZeResFDG":
@@ -1448,7 +1515,7 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             lg = _local_gain_for((cond.shape[-2], cond.shape[-1]))
             if lg is not None:
                 resid = resid * lg.expand(-1, resid.shape[1], -1, -1)
-            noise_pred = uncond * alpha + cond_scale * resid
+            noise_pred = uncond * alpha + cond_scale_eff * resid
             return noise_pred
 
         # RescaleCFG/FDG path (with optional momentum/perp damping and S-curve shaping)
@@ -1496,76 +1563,7 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                 delta = delta * lg.expand(-1, delta.shape[1], -1, -1)
             cond = uncond + delta
 
-        cond_scale_eff = cond_scale
-        curve_gain = 1.0
-        if cfg_curve > 0.0 and (sigma is not None):
-            s = sigma
-            if s.ndim > 1:
-                s = s.flatten()
-            s_max = float(torch.max(s).item())
-            s_min = float(torch.min(s).item())
-            if sigma_seen["max"] is None:
-                sigma_seen["max"] = s_max
-                sigma_seen["min"] = s_min
-            else:
-                sigma_seen["max"] = max(sigma_seen["max"], s_max)
-                sigma_seen["min"] = min(sigma_seen["min"], s_min)
-            lo = max(1e-6, sigma_seen["min"])
-            hi = max(lo * (1.0 + 1e-6), sigma_seen["max"])
-            t = (torch.log(s + 1e-6) - torch.log(torch.tensor(lo, device=sigma.device))) / (torch.log(torch.tensor(hi, device=sigma.device)) - torch.log(torch.tensor(lo, device=sigma.device)) + 1e-6)
-            t = t.clamp(0.0, 1.0)
-            k = 6.0 * float(cfg_curve)
-            s_curve = torch.tanh((t - 0.5) * k)
-            g = 1.0 + 0.15 * float(cfg_curve) * s_curve
-            if g.ndim > 0:
-                g = g.mean().item()
-            curve_gain = float(g)
-            cond_scale_eff = cond_scale * curve_gain
-
-        # Per-step CFG schedule (cosine/warmup/U) using normalized sigma progress
-        if isinstance(cfg_sched_type, str) and cfg_sched_type.lower() != "off" and (sigma is not None):
-            try:
-                s = sigma
-                if s.ndim > 1:
-                    s = s.flatten()
-                s_max = float(torch.max(s).item())
-                s_min = float(torch.min(s).item())
-                if sigma_seen["max"] is None:
-                    sigma_seen["max"] = s_max
-                    sigma_seen["min"] = s_min
-                else:
-                    sigma_seen["max"] = max(sigma_seen["max"], s_max)
-                    sigma_seen["min"] = min(sigma_seen["min"], s_min)
-                lo = max(1e-6, sigma_seen["min"])
-                hi = max(lo * (1.0 + 1e-6), sigma_seen["max"])
-                t = (torch.log(s + 1e-6) - torch.log(torch.tensor(lo, device=sigma.device))) / (torch.log(torch.tensor(hi, device=sigma.device)) - torch.log(torch.tensor(lo, device=sigma.device)) + 1e-6)
-                t = t.clamp(0.0, 1.0)
-                if t.ndim > 0:
-                    t_val = float(t.mean().item())
-                else:
-                    t_val = float(t.item())
-                cmin = float(max(0.0, cfg_sched_min))
-                cmax = float(max(cmin, cfg_sched_max))
-                tp = cfg_sched_type.lower()
-                if tp == "cosine":
-                    import math
-                    cfg_val = cmax - (cmax - cmin) * 0.5 * (1.0 + math.cos(math.pi * t_val))
-                elif tp in ("warmup", "warm-up", "linear"):
-                    g = float(max(0.0, min(1.0, t_val))) ** float(max(0.1, cfg_sched_gamma))
-                    cfg_val = cmin + (cmax - cmin) * g
-                elif tp in ("u", "u-shape", "ushape"):
-                    # edges high, middle low; power to control concavity
-                    e = 4.0 * (t_val - 0.5) * (t_val - 0.5)
-                    e = float(min(1.0, max(0.0, e)))
-                    e = e ** float(max(0.1, cfg_sched_u_pow))
-                    cfg_val = cmin + (cmax - cmin) * e
-                else:
-                    cfg_val = cond_scale_eff
-                # Keep curve shaping as a multiplier on top of scheduled absolute value
-                shape = (cond_scale_eff / float(cond_scale)) if float(cond_scale) != 0.0 else 1.0
-                cond_scale_eff = float(cfg_val) * float(shape)
-            except Exception:
-                pass
+        
 
         # Epsilon scaling (exposure bias correction): early steps get multiplier closer to (1 + eps_scale)
         eps_mult = 1.0
@@ -2324,6 +2322,15 @@ class ComfyAdaptiveDetailEnhancer25:
                 __cade_noop = 0  # ensure non-empty with-block
                 # Latent buffer runtime state
                 lb_state = {"z_ema": None, "anchor": None, "drift_last": None, "ref_dist_last": None}
+                # Pre-initialize EMA from the incoming latent so that a 2-iteration node already benefits on iter=1
+                try:
+                    if bool(latent_buffer) and (iterations > 1):
+                        z0 = current_latent.get("samples", None)
+                        if isinstance(z0, torch.Tensor):
+                            lb_state["z_ema"] = z0.clone().detach()
+                            lb_state["anchor"] = z0.clone().detach()
+                except Exception:
+                    pass
 
                 # Preflight: reset sticky state and build external masks once (CPU-pinned)
                 try:
