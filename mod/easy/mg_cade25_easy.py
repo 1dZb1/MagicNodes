@@ -1320,7 +1320,9 @@ def _fdg_split_three(delta: torch.Tensor,
 def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: float, momentum_beta: float, cfg_curve: float, perp_damp: float, use_zero_init: bool=False, zero_init_steps: int=0, fdg_low: float = 0.6, fdg_high: float = 1.3, fdg_sigma: float = 1.0, ze_zero_steps: int = 0, ze_adaptive: bool = False, ze_r_switch_hi: float = 0.6, ze_r_switch_lo: float = 0.45, fdg_low_adaptive: bool = False, fdg_low_min: float = 0.45, fdg_low_max: float = 0.7, fdg_ema_beta: float = 0.8, use_local_mask: bool = False, mask_inside: float = 1.0, mask_outside: float = 1.0,
                                 midfreq_enable: bool = False, midfreq_gain: float = 0.0, midfreq_sigma_lo: float = 0.8, midfreq_sigma_hi: float = 2.0,
                                 mahiro_plus_enable: bool = False, mahiro_plus_strength: float = 0.5,
-                                eps_scale_enable: bool = False, eps_scale: float = 0.0):
+                                eps_scale_enable: bool = False, eps_scale: float = 0.0,
+                                cfg_sched_type: str = "off", cfg_sched_min: float = 0.0, cfg_sched_max: float = 0.0,
+                                cfg_sched_gamma: float = 1.5, cfg_sched_u_pow: float = 1.0):
 
     """Clone model and attach a cfg mixing function implementing RescaleCFG/FDG, CFGZero*/FD, or hybrid ZeResFDG.
     guidance_mode: 'default' | 'RescaleCFG' | 'RescaleFDG' | 'CFGZero*' | 'CFGZeroFD' | 'ZeResFDG'
@@ -1495,6 +1497,7 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             cond = uncond + delta
 
         cond_scale_eff = cond_scale
+        curve_gain = 1.0
         if cfg_curve > 0.0 and (sigma is not None):
             s = sigma
             if s.ndim > 1:
@@ -1513,10 +1516,56 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             t = t.clamp(0.0, 1.0)
             k = 6.0 * float(cfg_curve)
             s_curve = torch.tanh((t - 0.5) * k)
-            gain = 1.0 + 0.15 * float(cfg_curve) * s_curve
-            if gain.ndim > 0:
-                gain = gain.mean().item()
-            cond_scale_eff = cond_scale * float(gain)
+            g = 1.0 + 0.15 * float(cfg_curve) * s_curve
+            if g.ndim > 0:
+                g = g.mean().item()
+            curve_gain = float(g)
+            cond_scale_eff = cond_scale * curve_gain
+
+        # Per-step CFG schedule (cosine/warmup/U) using normalized sigma progress
+        if isinstance(cfg_sched_type, str) and cfg_sched_type.lower() != "off" and (sigma is not None):
+            try:
+                s = sigma
+                if s.ndim > 1:
+                    s = s.flatten()
+                s_max = float(torch.max(s).item())
+                s_min = float(torch.min(s).item())
+                if sigma_seen["max"] is None:
+                    sigma_seen["max"] = s_max
+                    sigma_seen["min"] = s_min
+                else:
+                    sigma_seen["max"] = max(sigma_seen["max"], s_max)
+                    sigma_seen["min"] = min(sigma_seen["min"], s_min)
+                lo = max(1e-6, sigma_seen["min"])
+                hi = max(lo * (1.0 + 1e-6), sigma_seen["max"])
+                t = (torch.log(s + 1e-6) - torch.log(torch.tensor(lo, device=sigma.device))) / (torch.log(torch.tensor(hi, device=sigma.device)) - torch.log(torch.tensor(lo, device=sigma.device)) + 1e-6)
+                t = t.clamp(0.0, 1.0)
+                if t.ndim > 0:
+                    t_val = float(t.mean().item())
+                else:
+                    t_val = float(t.item())
+                cmin = float(max(0.0, cfg_sched_min))
+                cmax = float(max(cmin, cfg_sched_max))
+                tp = cfg_sched_type.lower()
+                if tp == "cosine":
+                    import math
+                    cfg_val = cmax - (cmax - cmin) * 0.5 * (1.0 + math.cos(math.pi * t_val))
+                elif tp in ("warmup", "warm-up", "linear"):
+                    g = float(max(0.0, min(1.0, t_val))) ** float(max(0.1, cfg_sched_gamma))
+                    cfg_val = cmin + (cmax - cmin) * g
+                elif tp in ("u", "u-shape", "ushape"):
+                    # edges high, middle low; power to control concavity
+                    e = 4.0 * (t_val - 0.5) * (t_val - 0.5)
+                    e = float(min(1.0, max(0.0, e)))
+                    e = e ** float(max(0.1, cfg_sched_u_pow))
+                    cfg_val = cmin + (cmax - cmin) * e
+                else:
+                    cfg_val = cond_scale_eff
+                # Keep curve shaping as a multiplier on top of scheduled absolute value
+                shape = (cond_scale_eff / float(cond_scale)) if float(cond_scale) != 0.0 else 1.0
+                cond_scale_eff = float(cfg_val) * float(shape)
+            except Exception:
+                pass
 
         # Epsilon scaling (exposure bias correction): early steps get multiplier closer to (1 + eps_scale)
         eps_mult = 1.0
@@ -2145,6 +2194,12 @@ class ComfyAdaptiveDetailEnhancer25:
         clipseg_blend = str(pv("clipseg_blend", clipseg_blend))
         clipseg_ref_gate = bool(pv("clipseg_ref_gate", clipseg_ref_gate))
         clipseg_ref_threshold = float(pv("clipseg_ref_threshold", clipseg_ref_threshold))
+        # CFG scheduling (internal-only; configured via presets)
+        cfg_sched = str(pv("cfg_sched", "off"))
+        cfg_sched_min = float(pv("cfg_sched_min", max(0.0, cfg * 0.5)))
+        cfg_sched_max = float(pv("cfg_sched_max", cfg))
+        cfg_sched_gamma = float(pv("cfg_sched_gamma", 1.5))
+        cfg_sched_u_pow = float(pv("cfg_sched_u_pow", 1.0))
         # Latent buffer (internal-only; configured via presets)
         latent_buffer = bool(pv("latent_buffer", True))
         lb_inject = float(pv("lb_inject", 0.25))
@@ -2386,7 +2441,9 @@ class ComfyAdaptiveDetailEnhancer25:
                       fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
                       use_local_mask=bool(onnx_local_guidance), mask_inside=float(onnx_mask_inside), mask_outside=float(onnx_mask_outside),
                       mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
-                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
+                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale),
+                      cfg_sched_type=str(cfg_sched), cfg_sched_min=float(cfg_sched_min), cfg_sched_max=float(cfg_sched_max),
+                      cfg_sched_gamma=float(cfg_sched_gamma), cfg_sched_u_pow=float(cfg_sched_u_pow)
                   )
                 # check once more right before the loop starts
                 model_management.throw_exception_if_processing_interrupted()
