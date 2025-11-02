@@ -65,8 +65,6 @@ Photo Dog
 - start latent ~ 672x944 -> final ~ 3688x5192 across 4 steps.
 - Notes
   - Lowering the starting latent (e.g., 512x768) or lower, reduces both VRAM and RAM.
-  - Disabling hi-res depth/edges (ControlFusion) reduces peaks. (not recommended!)
-  - Depth weights add a bit of RAM on load; models live under `depth-anything/`.
 
 ## 💥 Memory
 - At each step, the image is upscaled from the previous step! Keep this in mind, the final image may not fit into your PC's memory if the starting latent is high.
