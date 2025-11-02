@@ -73,7 +73,7 @@ Photo Dog
  
 
 
-## Install (ComfyUI 0.3.60, tested on this version)
+## Install (ComfyUI >=0.3.60)
 Preparing:
 I recomend update pytorch version: 2.8.0+cu129.
 1. PyTorch install: `pip install torch==2.8.0 torchvision==0.23.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cu129`
@@ -89,7 +89,7 @@ Next:
 5. Workflows
 Folder `workflows/` contains ready-to-use graphs:
 - `mg_SuperSimple-Workflow.json` — one-node pipeline (2/3/4 steps) with presets
-- `mg_Easy-Workflow.json` — the same logic built from individual Easy nodes
+- `mg_Easy-Workflow.json` — the same logic built from individual Easy nodes.
 You can save this workflow to ComfyUI `ComfyUI\user\default\workflows`
 6. Restart ComfyUI. Nodes appear under the "MagicNodes" categories.
 

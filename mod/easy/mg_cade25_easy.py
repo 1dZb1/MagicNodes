@@ -2145,6 +2145,15 @@ class ComfyAdaptiveDetailEnhancer25:
         clipseg_blend = str(pv("clipseg_blend", clipseg_blend))
         clipseg_ref_gate = bool(pv("clipseg_ref_gate", clipseg_ref_gate))
         clipseg_ref_threshold = float(pv("clipseg_ref_threshold", clipseg_ref_threshold))
+        # Latent buffer (internal-only; configured via presets)
+        latent_buffer = bool(pv("latent_buffer", True))
+        lb_inject = float(pv("lb_inject", 0.25))
+        lb_ema = float(pv("lb_ema", 0.75))
+        lb_every = int(pv("lb_every", 1))
+        lb_anchor_every = int(pv("lb_anchor_every", 6))
+        lb_masked = bool(pv("lb_masked", True))
+        lb_rebase_thresh = float(pv("lb_rebase_thresh", 0.10))
+        lb_rebase_rate = float(pv("lb_rebase_rate", 0.25))
         polish_enable = bool(pv("polish_enable", polish_enable))
         polish_keep_low = float(pv("polish_keep_low", polish_keep_low))
         polish_edge_lock = float(pv("polish_edge_lock", polish_edge_lock))
@@ -2258,6 +2267,8 @@ class ComfyAdaptiveDetailEnhancer25:
         try:
             with torch.inference_mode():
                 __cade_noop = 0  # ensure non-empty with-block
+                # Latent buffer runtime state
+                lb_state = {"z_ema": None, "anchor": None, "drift_last": None, "ref_dist_last": None}
 
                 # Preflight: reset sticky state and build external masks once (CPU-pinned)
                 try:
@@ -2521,6 +2532,31 @@ class ComfyAdaptiveDetailEnhancer25:
                     except Exception:
                         pass
 
+                    # Latent buffer: pre-sampling injection
+                    if bool(latent_buffer) and (iterations > 1) and (i > 0) and (i % max(1, lb_every) == 0):
+                        try:
+                            z = current_latent["samples"]
+                            if lb_state["z_ema"] is None or tuple(lb_state["z_ema"].shape) != tuple(z.shape):
+                                lb_state["z_ema"] = z.clone().detach()
+                            inj = float(max(0.0, min(0.95, lb_inject)))
+                            # optional boost when far from reference (uses last known distance)
+                            try:
+                                if (ref_embed is not None) and (lb_state.get("ref_dist_last") is not None) and (lb_state["ref_dist_last"] > float(ref_threshold)):
+                                    inj = min(0.95, inj * (1.0 + min(0.5, (lb_state["ref_dist_last"] - float(ref_threshold)) * 0.75)))
+                            except Exception:
+                                pass
+                            z_ema = lb_state["z_ema"]
+                            if bool(lb_masked) and (onnx_mask_last is not None):
+                                m = onnx_mask_last.movedim(-1, 1)
+                                m = F.interpolate(m, size=(z.shape[-2], z.shape[-1]), mode='bilinear', align_corners=False).clamp(0, 1)
+                                m = m.expand(-1, z.shape[1], -1, -1)
+                                z = z * (1.0 - inj * m) + z_ema * (inj * m)
+                            else:
+                                z = z * (1.0 - inj) + z_ema * inj
+                            current_latent["samples"] = z
+                        except Exception:
+                            pass
+
                     # Sampler model prepared once above; reused across iterations (no-op here)
                     sampler_model = sampler_model
 
@@ -2711,6 +2747,32 @@ class ComfyAdaptiveDetailEnhancer25:
                     except Exception:
                         pass
 
+                    # Latent buffer: post-sampling EMA update and drift measure
+                    try:
+                        z_now = current_latent["samples"].detach()
+                        if lb_state["z_ema"] is None or tuple(lb_state["z_ema"].shape) != tuple(z_now.shape):
+                            lb_state["z_ema"] = z_now.clone()
+                            lb_state["anchor"] = z_now.clone()
+                        else:
+                            lb = float(max(0.0, min(0.99, lb_ema)))
+                            lb_state["z_ema"] = lb * lb_state["z_ema"] + (1.0 - lb) * z_now
+                        if int(lb_anchor_every) > 0 and ((i + 1) % int(lb_anchor_every) == 0):
+                            lb_state["anchor"] = lb_state["z_ema"].clone()
+                    except Exception:
+                        pass
+                    # local RMS drift (independent of UI)
+                    try:
+                        _cur = current_latent["samples"]
+                        _prev = prev_samples
+                        if _prev.device != _cur.device:
+                            _prev = _prev.to(_cur.device)
+                        if _prev.dtype != _cur.dtype:
+                            _prev = _prev.to(dtype=_cur.dtype)
+                        _diff = _cur - _prev
+                        lb_state["drift_last"] = float(torch.sqrt(torch.mean(_diff * _diff)).item())
+                    except Exception:
+                        pass
+
                     if bool(latent_compare):
                         _cur = current_latent["samples"]
                         _prev = prev_samples
@@ -2730,6 +2792,24 @@ class ComfyAdaptiveDetailEnhancer25:
                             current_denoise = max(0.20, current_denoise * damp)
                             cfg_damp = 0.997 if damp > 0.9 else 0.99
                             current_cfg = max(1.0, current_cfg * cfg_damp)
+                    # Latent buffer: optional rebase toward anchor on overshoot
+                    if bool(latent_buffer) and (iterations > 1) and (lb_state.get("anchor") is not None):
+                        try:
+                            dval = lb_state.get("drift_last", None)
+                            if (dval is not None) and (dval > float(lb_rebase_thresh)):
+                                rb = float(max(0.0, min(1.0, lb_rebase_rate)))
+                                z = current_latent["samples"]
+                                a = lb_state["anchor"]
+                                if bool(lb_masked) and (onnx_mask_last is not None):
+                                    m = onnx_mask_last.movedim(-1, 1)
+                                    m = F.interpolate(m, size=(z.shape[-2], z.shape[-1]), mode='bilinear', align_corners=False).clamp(0, 1)
+                                    m = m.expand(-1, z.shape[1], -1, -1)
+                                    z = z * (1.0 - rb * m) + a * (rb * m)
+                                else:
+                                    z = z * (1.0 - rb) + a * rb
+                                current_latent["samples"] = z
+                        except Exception:
+                            pass
                     try:
                         del prev_samples
                     except Exception:
@@ -2909,6 +2989,11 @@ class ComfyAdaptiveDetailEnhancer25:
                             if dist > ref_threshold:
                                 current_denoise = max(0.10, current_denoise * 0.9)
                                 current_cfg = max(1.0, current_cfg * 0.99)
+                            # store for next-iter latent buffer injection boost
+                            try:
+                                lb_state["ref_dist_last"] = float(dist)
+                            except Exception:
+                                pass
                         except Exception:
                             pass
 
