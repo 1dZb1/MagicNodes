@@ -12,11 +12,29 @@ from .mg_upscale_module import clear_gpu_and_ram_cache
 _DEPTH_INIT = False
 _DEPTH_MODEL = None
 _DEPTH_PROC = None
+_DEPTH_WARNED = False
+
+def _find_custom_nodes_root() -> str | None:
+    try:
+        here = os.path.abspath(os.path.dirname(__file__))
+        cur = here
+        for _ in range(6):
+            if os.path.basename(cur).lower() == 'custom_nodes':
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    except Exception:
+        return None
+    return None
 
 
 def _insert_aux_path():
     try:
-        base = os.path.dirname(os.path.dirname(__file__))  # .../custom_nodes
+        base = _find_custom_nodes_root()
+        if base is None:
+            base = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
         aux_root = os.path.join(base, 'comfyui_controlnet_aux')
         aux_src = os.path.join(aux_root, 'src')
         for p in (aux_src, aux_root):
@@ -28,9 +46,9 @@ def _insert_aux_path():
 
 def _try_init_depth_anything(model_path: str):
     global _DEPTH_INIT, _DEPTH_MODEL, _DEPTH_PROC
-    if _DEPTH_INIT:
-        return _DEPTH_MODEL is not None
-    _DEPTH_INIT = True
+    # If already loaded, reuse
+    if _DEPTH_MODEL is not None:
+        return True
     # Resolve model path: allow 'auto' or directory and prefer vitl>vitb>vits>vitg
     try:
         def _prefer_order(paths):
@@ -57,12 +75,23 @@ def _try_init_depth_anything(model_path: str):
                 search_dirs.append(mp)
             base_dir = os.path.join(os.path.dirname(__file__), '..', 'depth-anything')
             search_dirs.append(base_dir)
+            # also scan comfyui_controlnet_aux ckpts/depth-anything recursively if present
+            base_custom = _find_custom_nodes_root()
+            if base_custom is None:
+                base_custom = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
+            aux_ckpts = os.path.join(base_custom, 'comfyui_controlnet_aux', 'ckpts', 'depth-anything')
+            search_dirs.append(aux_ckpts)
             cand = []
             for d in search_dirs:
                 try:
-                    for fn in os.listdir(d):
-                        if fn.lower().endswith('.pth') and 'depth_anything_v2' in fn.lower():
-                            cand.append(os.path.join(d, fn))
+                    if not os.path.isdir(d):
+                        continue
+                    for root, _dirs, files in os.walk(d):
+                        for fn in files:
+                            fnl = fn.lower()
+                            key = fnl.replace('-', '_')
+                            if fnl.endswith('.pth') and ('depth_anything' in key) and ('v2' in key):
+                                cand.append(os.path.join(root, fn))
                 except Exception:
                     pass
             if cand:
@@ -72,6 +101,23 @@ def _try_init_depth_anything(model_path: str):
         model_path = _resolve_path(model_path)
     except Exception:
         pass
+    # If no local weights resolved, bail out to cheap fallback instead of triggering heavy auto-downloads
+    try:
+        if not (isinstance(model_path, str) and os.path.isfile(model_path)):
+            global _DEPTH_WARNED
+            if not _DEPTH_WARNED:
+                try:
+                    print("[ControlFusion][Depth] no local Depth Anything v2 weights found; using pseudo-depth fallback.")
+                except Exception:
+                    pass
+                _DEPTH_WARNED = True
+            _DEPTH_MODEL = None
+            _DEPTH_PROC = False
+            return False
+    except Exception:
+        _DEPTH_MODEL = None
+        _DEPTH_PROC = False
+        return False
     # Prefer our vendored implementation first
     try:
         from ...vendor.depth_anything_v2.dpt import DepthAnythingV2  # type: ignore
@@ -189,12 +235,12 @@ def _build_depth_map(image_bhwc: torch.Tensor, res: int, model_path: str, hires_
             return d
         except Exception:
             pass
-    # Fallback pseudo-depth: luminance + gentle blur
-    lum = (0.2126 * image_bhwc[..., 0] + 0.7152 * image_bhwc[..., 1] + 0.0722 * image_bhwc[..., 2]).to(dtype=dtype)
-    x = lum.movedim(-1, 0).unsqueeze(0) if lum.ndim == 3 else lum.unsqueeze(0).unsqueeze(0)
-    x = F.interpolate(x, size=(H, W), mode='bilinear', align_corners=False)
-    x = F.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-    return x[0, 0].clamp(0, 1)
+    # Fallback depth: constant mid-gray (0.5) to keep uniform guidance without heavy processing
+    try:
+        return torch.full((H, W), 0.5, device=dev, dtype=dtype)
+    except Exception:
+        # last-resort tensor creation on CPU
+        return torch.full((H, W), 0.5, device='cpu', dtype=torch.float32).to(device=dev, dtype=dtype)
 
 
 def _pyracanny(image_bhwc: torch.Tensor,

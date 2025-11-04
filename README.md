@@ -83,7 +83,7 @@ Next:
 1. Clone or download this repo into `ComfyUI/custom_nodes/`
 2. Install helpers: `pip install -r requirements.txt`
 3. I recomend, take my negative LoRA `mg_7lambda_negative.safetensors` in HF https://huggingface.co/DD32/mg_7lambda_negative/blob/main/mg_7lambda_negative.safetensors and place the file in ComfyUI, to `ComfyUI/models/loras`
-4. download model `depth_anything_v2_vitl.pth` https://huggingface.co/depth-anything/Depth-Anything-V2-Large/tree/main and place inside in to `depth-anything/` folder.
+4. If you have `custom_nodes\comfyui_controlnet_aux\` installed and there is a depth model, then it is usually "picked up" automatically, if not, then, download model `depth_anything_v2_vitl.pth` https://huggingface.co/depth-anything/Depth-Anything-V2-Large/tree/main and place inside in to `depth-anything/` folder.
 5. Workflows
 Folder `workflows/` contains ready-to-use graphs:
 - `mg_SuperSimple-Workflow.json` — one-node pipeline (2/3/4 steps) with presets
