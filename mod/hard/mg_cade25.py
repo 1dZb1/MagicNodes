@@ -968,7 +968,10 @@ def _fdg_energy_fraction(delta: torch.Tensor, sigma: float = 1.0, radius: int = 
 def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: float, momentum_beta: float, cfg_curve: float, perp_damp: float, use_zero_init: bool=False, zero_init_steps: int=0, fdg_low: float = 0.6, fdg_high: float = 1.3, fdg_sigma: float = 1.0, ze_zero_steps: int = 0, ze_adaptive: bool = False, ze_r_switch_hi: float = 0.6, ze_r_switch_lo: float = 0.45, fdg_low_adaptive: bool = False, fdg_low_min: float = 0.45, fdg_low_max: float = 0.7, fdg_ema_beta: float = 0.8, use_local_mask: bool = False, mask_inside: float = 1.0, mask_outside: float = 1.0,
                                 midfreq_enable: bool = False, midfreq_gain: float = 0.0, midfreq_sigma_lo: float = 0.8, midfreq_sigma_hi: float = 2.0,
                                 mahiro_plus_enable: bool = False, mahiro_plus_strength: float = 0.5,
-                                eps_scale_enable: bool = False, eps_scale: float = 0.0):
+                                eps_scale_enable: bool = False, eps_scale: float = 0.0,
+                                # NEW: CWN + AGC for Hard node too
+                                cwn_enable: bool = True, alpha_c: float = 1.0, alpha_u: float = 1.0,
+                                agc_enable: bool = True, agc_tau: float = 2.8):
 
     """Clone model and attach a cfg mixing function implementing RescaleCFG/FDG, CFGZero*/FD, or hybrid ZeResFDG.
     guidance_mode: 'default' | 'RescaleCFG' | 'RescaleFDG' | 'CFGZero*' | 'CFGZeroFD' | 'ZeResFDG'
@@ -1073,6 +1076,17 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                         return cond * 0.0
                 except Exception:
                     pass
+            # CWN for CFGZero branches: align energies before projection
+            if bool(cwn_enable):
+                try:
+                    _eps = 1e-6
+                    sc = (cond.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt() + _eps)
+                    su = (uncond.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt() + _eps)
+                    g = 0.5 * (sc + su)
+                    cond = cond * (float(alpha_c) * g / sc)
+                    uncond = uncond * (float(alpha_u) * g / su)
+                except Exception:
+                    pass
             # Project cond onto uncond subspace (batch-wise alpha)
             bsz = cond.shape[0]
             pos_flat = cond.view(bsz, -1)
@@ -1115,6 +1129,13 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             cond = uncond + delta
         else:
             prev_delta["t"] = delta.detach()
+        # Adaptive Guidance Clipping on delta (Rescale path)
+        if bool(agc_enable):
+            try:
+                t = float(max(0.5, agc_tau))
+                delta = t * torch.tanh(delta / t)
+            except Exception:
+                pass
         # After momentum: optionally apply FDG and rebuild cond
         if mode == "RescaleFDG":
             # Adaptive low gain if enabled
@@ -1197,8 +1218,20 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
         x = x_orig / (sigma_ * sigma_ + 1.0)
         v_cond = ((x - (x_orig - cond)) * (sigma_ ** 2 + 1.0) ** 0.5) / (sigma_)
         v_uncond = ((x - (x_orig - uncond)) * (sigma_ ** 2 + 1.0) ** 0.5) / (sigma_)
-        v_cfg = v_uncond + cond_scale_eff * (v_cond - v_uncond)
-        ro_pos = torch.std(v_cond, dim=(1, 2, 3), keepdim=True)
+        # CWN in v-space for Rescale path (safer than eps-space)
+        if bool(cwn_enable):
+            try:
+                _e = 1e-6
+                rc = (v_cond.pow(2).mean(dim=(1,2,3), keepdim=True).sqrt() + _e)
+                ru = (v_uncond.pow(2).mean(dim=(1,2,3), keepdim=True).sqrt() + _e)
+                v_cond_n = (v_cond / rc) * float(alpha_c)
+                v_uncond_n = (v_uncond / ru) * float(alpha_u)
+            except Exception:
+                v_cond_n, v_uncond_n = v_cond, v_uncond
+        else:
+            v_cond_n, v_uncond_n = v_cond, v_uncond
+        v_cfg = v_uncond_n + cond_scale_eff * (v_cond_n - v_uncond_n)
+        ro_pos = torch.std(v_cond_n, dim=(1, 2, 3), keepdim=True)
         ro_cfg = torch.std(v_cfg, dim=(1, 2, 3), keepdim=True).clamp_min(1e-6)
         v_rescaled = v_cfg * (ro_pos / ro_cfg)
         v_final = float(rescale_multiplier) * v_rescaled + (1.0 - float(rescale_multiplier)) * v_cfg
@@ -1465,6 +1498,13 @@ class ComfyAdaptiveDetailEnhancer25:
                 "cfg_curve": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "S-curve shaping of cond_scale across steps (0=flat)."}),
                 "perp_damp": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Remove a small portion of the component parallel to previous delta (0-1)."}),
 
+                # Conditioning Weight Normalization (CWN) + Adaptive Guidance Clipping (AGC)
+                "cwn_enable": ("BOOLEAN", {"default": True, "tooltip": "Normalize cond/uncond energy to steady CFG mixing."}),
+                "alpha_c": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "alpha_u": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01}),
+                "agc_enable": ("BOOLEAN", {"default": True, "tooltip": "Soft-clip residual guidance to prevent rare spikes."}),
+                "agc_tau": ("FLOAT", {"default": 2.8, "min": 0.5, "max": 6.0, "step": 0.1}),
+
                 # NAG (Normalized Attention Guidance) toggles
                 "use_nag": ("BOOLEAN", {"default": False, "tooltip": "Apply NAG inside CrossAttention (positive branch) during this node."}),
                 "nag_scale": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 50.0, "step": 0.1}),
@@ -1555,8 +1595,9 @@ class ComfyAdaptiveDetailEnhancer25:
                      Sharpnes_strenght=0.300, threshold=0.03, latent_compare=False, accumulation="default",
                      reference_clean=False, reference_image=None, clip_vision=None, ref_preview=224, ref_threshold=0.03, ref_cooldown=1,
                      guidance_mode="RescaleCFG", rescale_multiplier=0.7, momentum_beta=0.0, cfg_curve=0.0, perp_damp=0.0,
-                      use_nag=False, nag_scale=4.0, nag_tau=2.5, nag_alpha=0.25,
-                      aqclip_enable=False, aq_tile=32, aq_stride=16, aq_alpha=2.0, aq_ema_beta=0.8, aq_attn=False,
+                     cwn_enable=True, alpha_c=1.0, alpha_u=1.0, agc_enable=True, agc_tau=2.8,
+                     use_nag=False, nag_scale=4.0, nag_tau=2.5, nag_alpha=0.25,
+                     aqclip_enable=False, aq_tile=32, aq_stride=16, aq_alpha=2.0, aq_ema_beta=0.8, aq_attn=False,
                      use_zero_init=False, zero_init_steps=0,
                      fdg_low=0.6, fdg_high=1.3, fdg_sigma=1.0, ze_res_zero_steps=2,
                      ze_adaptive=False, ze_r_switch_hi=0.60, ze_r_switch_lo=0.45,
@@ -1719,7 +1760,9 @@ class ComfyAdaptiveDetailEnhancer25:
                       fdg_low_adaptive=bool(fdg_low_adaptive), fdg_low_min=float(fdg_low_min), fdg_low_max=float(fdg_low_max), fdg_ema_beta=float(fdg_ema_beta),
                       use_local_mask=False, mask_inside=1.0, mask_outside=1.0,
                       mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
-                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale)
+                      eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale),
+                      cwn_enable=bool(cwn_enable), alpha_c=float(alpha_c), alpha_u=float(alpha_u),
+                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau)
                   )
                 # early interruption check before starting the loop
                 try:

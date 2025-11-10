@@ -1322,7 +1322,9 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                                 mahiro_plus_enable: bool = False, mahiro_plus_strength: float = 0.5,
                                 eps_scale_enable: bool = False, eps_scale: float = 0.0,
                                 cfg_sched_type: str = "off", cfg_sched_min: float = 0.0, cfg_sched_max: float = 0.0,
-                                cfg_sched_gamma: float = 1.5, cfg_sched_u_pow: float = 1.0):
+                                cfg_sched_gamma: float = 1.5, cfg_sched_u_pow: float = 1.0,
+                                cwn_enable: bool = True, alpha_c: float = 1.0, alpha_u: float = 1.0,
+                                agc_enable: bool = True, agc_tau: float = 2.8):
 
     """Clone model and attach a cfg mixing function implementing RescaleCFG/FDG, CFGZero*/FD, or hybrid ZeResFDG.
     guidance_mode: 'default' | 'RescaleCFG' | 'RescaleFDG' | 'CFGZero*' | 'CFGZeroFD' | 'ZeResFDG'
@@ -1494,6 +1496,17 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                         return cond * 0.0
                 except Exception:
                     pass
+            # CWN for CFGZero branches: energy align cond/uncond before projection
+            if bool(cwn_enable):
+                try:
+                    _eps = 1e-6
+                    sc = (cond.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt() + _eps)
+                    su = (uncond.pow(2).mean(dim=(1, 2, 3), keepdim=True).sqrt() + _eps)
+                    g = 0.5 * (sc + su)
+                    cond = cond * (float(alpha_c) * g / sc)
+                    uncond = uncond * (float(alpha_u) * g / su)
+                except Exception:
+                    pass
             # Project cond onto uncond subspace (batch-wise alpha)
             bsz = cond.shape[0]
             pos_flat = cond.view(bsz, -1)
@@ -1515,6 +1528,14 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             lg = _local_gain_for((cond.shape[-2], cond.shape[-1]))
             if lg is not None:
                 resid = resid * lg.expand(-1, resid.shape[1], -1, -1)
+            # --- AGC for CFGZero branches ---
+            if bool(agc_enable):
+                try:
+                    t = float(max(0.5, agc_tau))
+                    resid = t * torch.tanh(resid / t)
+                except Exception:
+                    pass
+
             noise_pred = uncond * alpha + cond_scale_eff * resid
             return noise_pred
 
@@ -1536,6 +1557,14 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
             cond = uncond + delta
         else:
             prev_delta["t"] = delta.detach()
+        # --- Adaptive Guidance Clipping (AGC) ---
+        if bool(agc_enable):
+            try:
+                t = float(max(0.5, agc_tau))
+                delta = t * torch.tanh(delta / t)
+            except Exception:
+                pass
+
         # After momentum: optionally apply FDG and rebuild cond
         if mode == "RescaleFDG":
             # Adaptive low gain if enabled
@@ -1595,8 +1624,22 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
         x = x_orig / (sigma_ * sigma_ + 1.0)
         v_cond = ((x - (x_orig - cond)) * (sigma_ ** 2 + 1.0) ** 0.5) / (sigma_)
         v_uncond = ((x - (x_orig - uncond)) * (sigma_ ** 2 + 1.0) ** 0.5) / (sigma_)
-        v_cfg = v_uncond + cond_scale_eff * (v_cond - v_uncond)
-        ro_pos = torch.std(v_cond, dim=(1, 2, 3), keepdim=True)
+
+        # CWN in v-space (more stable than eps-space)
+        if bool(cwn_enable):
+            try:
+                _eps = 1e-6
+                rc = (v_cond.pow(2).mean(dim=(1,2,3), keepdim=True).sqrt() + _eps)
+                ru = (v_uncond.pow(2).mean(dim=(1,2,3), keepdim=True).sqrt() + _eps)
+                v_cond_n = (v_cond / rc) * float(alpha_c)
+                v_uncond_n = (v_uncond / ru) * float(alpha_u)
+            except Exception:
+                v_cond_n, v_uncond_n = v_cond, v_uncond
+        else:
+            v_cond_n, v_uncond_n = v_cond, v_uncond
+
+        v_cfg = v_uncond_n + cond_scale_eff * (v_cond_n - v_uncond_n)
+        ro_pos = torch.std(v_cond_n, dim=(1, 2, 3), keepdim=True)
         ro_cfg = torch.std(v_cfg, dim=(1, 2, 3), keepdim=True).clamp_min(1e-6)
         v_rescaled = v_cfg * (ro_pos / ro_cfg)
         v_final = float(rescale_multiplier) * v_rescaled + (1.0 - float(rescale_multiplier)) * v_cfg
@@ -2198,6 +2241,13 @@ class ComfyAdaptiveDetailEnhancer25:
         cfg_sched_max = float(pv("cfg_sched_max", cfg))
         cfg_sched_gamma = float(pv("cfg_sched_gamma", 1.5))
         cfg_sched_u_pow = float(pv("cfg_sched_u_pow", 1.0))
+
+        # CWN + AGC defaults (hidden in Easy; controlled via presets)
+        cwn_enable = bool(pv("cwn_enable", True))
+        alpha_c = float(pv("alpha_c", 1.0))
+        alpha_u = float(pv("alpha_u", 1.0))
+        agc_enable = bool(pv("agc_enable", True))
+        agc_tau = float(pv("agc_tau", 2.8))
         # Latent buffer (internal-only; configured via presets)
         latent_buffer = bool(pv("latent_buffer", True))
         lb_inject = float(pv("lb_inject", 0.25))
@@ -2450,7 +2500,9 @@ class ComfyAdaptiveDetailEnhancer25:
                       mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
                       eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale),
                       cfg_sched_type=str(cfg_sched), cfg_sched_min=float(cfg_sched_min), cfg_sched_max=float(cfg_sched_max),
-                      cfg_sched_gamma=float(cfg_sched_gamma), cfg_sched_u_pow=float(cfg_sched_u_pow)
+                      cfg_sched_gamma=float(cfg_sched_gamma), cfg_sched_u_pow=float(cfg_sched_u_pow),
+                      cwn_enable=bool(cwn_enable), alpha_c=float(alpha_c), alpha_u=float(alpha_u),
+                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau)
                   )
                 # check once more right before the loop starts
                 model_management.throw_exception_if_processing_interrupted()
