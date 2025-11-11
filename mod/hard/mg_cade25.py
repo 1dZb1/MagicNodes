@@ -971,7 +971,9 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                                 eps_scale_enable: bool = False, eps_scale: float = 0.0,
                                 # NEW: CWN + AGC for Hard node too
                                 cwn_enable: bool = True, alpha_c: float = 1.0, alpha_u: float = 1.0,
-                                agc_enable: bool = True, agc_tau: float = 2.8):
+                                agc_enable: bool = True, agc_tau: float = 2.8,
+                                # NAG fallback
+                                nag_fb_enable: bool = False, nag_fb_scale: float = 4.0, nag_fb_tau: float = 2.5, nag_fb_alpha: float = 0.25):
 
     """Clone model and attach a cfg mixing function implementing RescaleCFG/FDG, CFGZero*/FD, or hybrid ZeResFDG.
     guidance_mode: 'default' | 'RescaleCFG' | 'RescaleFDG' | 'CFGZero*' | 'CFGZeroFD' | 'ZeResFDG'
@@ -1007,6 +1009,26 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
         cond_scale = args["cond_scale"]
         sigma = args.get("sigma", None)
         x_orig = args.get("input", None)
+
+        # NAG fallback (noise-space) when CrossAttention patch inactive
+        if bool(nag_fb_enable):
+            try:
+                from . import mg_sagpu_attention as _sa
+                active = bool(getattr(_sa, "_nag_patch_active", False))
+            except Exception:
+                active = False
+            if not active:
+                try:
+                    phi = float(nag_fb_scale); tau = float(nag_fb_tau); a = float(nag_fb_alpha)
+                    g = cond * phi - uncond * (phi - 1.0)
+                    def _l1(x):
+                        return torch.sum(torch.abs(x), dim=(1,2,3), keepdim=True).clamp_min(1e-6)
+                    s_pos = _l1(cond); s_g = _l1(g)
+                    scale = (s_pos * tau) / s_g
+                    g = torch.where((s_g > s_pos * tau), g * scale, g)
+                    cond = g * a + cond * (1.0 - a)
+                except Exception:
+                    pass
 
         # Local spatial gain from CURRENT_ONNX_MASK_BCHW, resized to cond spatial size
         def _local_gain_for(hw):
@@ -1762,7 +1784,8 @@ class ComfyAdaptiveDetailEnhancer25:
                       mahiro_plus_enable=bool(muse_blend), mahiro_plus_strength=float(muse_blend_strength),
                       eps_scale_enable=bool(eps_scale_enable), eps_scale=float(eps_scale),
                       cwn_enable=bool(cwn_enable), alpha_c=float(alpha_c), alpha_u=float(alpha_u),
-                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau)
+                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau),
+                      nag_fb_enable=bool(use_nag), nag_fb_scale=float(nag_scale), nag_fb_tau=float(nag_tau), nag_fb_alpha=float(nag_alpha)
                   )
                 # early interruption check before starting the loop
                 try:

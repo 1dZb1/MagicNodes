@@ -1070,7 +1070,7 @@ def _scheduler_names():
         return ["normal", "MGHybrid"]
 
 
-def safe_decode(vae, lat, tile=512, ovlp=64):
+def safe_decode(vae, lat, tile=512, ovlp=128, to_fp32: bool = False):
     # Ensure we don't build autograd graphs during final decode steps
     with torch.inference_mode():
         h, w = lat["samples"].shape[-2:]
@@ -1089,6 +1089,12 @@ def safe_decode(vae, lat, tile=512, ovlp=64):
         out_cpu = out
         try:
             out_cpu = out_cpu.to('cpu')
+        except Exception:
+            pass
+        # Optional: force fp32 decode output (after moving to CPU to save VRAM)
+        try:
+            if bool(to_fp32) and out_cpu.dtype != torch.float32:
+                out_cpu = out_cpu.float()
         except Exception:
             pass
         try:
@@ -1324,7 +1330,8 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
                                 cfg_sched_type: str = "off", cfg_sched_min: float = 0.0, cfg_sched_max: float = 0.0,
                                 cfg_sched_gamma: float = 1.5, cfg_sched_u_pow: float = 1.0,
                                 cwn_enable: bool = True, alpha_c: float = 1.0, alpha_u: float = 1.0,
-                                agc_enable: bool = True, agc_tau: float = 2.8):
+                                agc_enable: bool = True, agc_tau: float = 2.8,
+                                nag_fb_enable: bool = False, nag_fb_scale: float = 4.0, nag_fb_tau: float = 2.5, nag_fb_alpha: float = 0.25):
 
     """Clone model and attach a cfg mixing function implementing RescaleCFG/FDG, CFGZero*/FD, or hybrid ZeResFDG.
     guidance_mode: 'default' | 'RescaleCFG' | 'RescaleFDG' | 'CFGZero*' | 'CFGZeroFD' | 'ZeResFDG'
@@ -1360,6 +1367,25 @@ def _wrap_model_with_guidance(model, guidance_mode: str, rescale_multiplier: flo
         cond_scale = args["cond_scale"]
         sigma = args.get("sigma", None)
         x_orig = args.get("input", None)
+
+        # --- NAG fallback in noise-space (when CrossAttention patch is inactive) ---
+        if bool(nag_fb_enable):
+            try:
+                active = bool(getattr(sa_patch, "_nag_patch_active", False))
+            except Exception:
+                active = False
+            if not active:
+                try:
+                    phi = float(nag_fb_scale); tau = float(nag_fb_tau); a = float(nag_fb_alpha)
+                    g = cond * phi - uncond * (phi - 1.0)
+                    def _l1(x):
+                        return torch.sum(torch.abs(x), dim=(1,2,3), keepdim=True).clamp_min(1e-6)
+                    s_pos = _l1(cond); s_g = _l1(g)
+                    scale = (s_pos * tau) / s_g
+                    g = torch.where((s_g > s_pos * tau), g * scale, g)
+                    cond = g * a + cond * (1.0 - a)
+                except Exception:
+                    pass
 
         # Local spatial gain from CURRENT_ONNX_MASK_BCHW, resized to cond spatial size
         def _local_gain_for(hw):
@@ -2242,6 +2268,9 @@ class ComfyAdaptiveDetailEnhancer25:
         cfg_sched_gamma = float(pv("cfg_sched_gamma", 1.5))
         cfg_sched_u_pow = float(pv("cfg_sched_u_pow", 1.0))
 
+        # VAE decode: allow forcing fp32 output (default false)
+        vae_decode_fp32 = bool(pv("vae_decode_fp32", False))
+
         # CWN + AGC defaults (hidden in Easy; controlled via presets)
         cwn_enable = bool(pv("cwn_enable", True))
         alpha_c = float(pv("alpha_c", 1.0))
@@ -2277,7 +2306,7 @@ class ComfyAdaptiveDetailEnhancer25:
         except Exception:
             pass
 
-        image = safe_decode(vae, latent)
+        image = safe_decode(vae, latent, to_fp32=bool(vae_decode_fp32))
         # allow user cancel right after initial decode
         model_management.throw_exception_if_processing_interrupted()
 
@@ -2502,7 +2531,8 @@ class ComfyAdaptiveDetailEnhancer25:
                       cfg_sched_type=str(cfg_sched), cfg_sched_min=float(cfg_sched_min), cfg_sched_max=float(cfg_sched_max),
                       cfg_sched_gamma=float(cfg_sched_gamma), cfg_sched_u_pow=float(cfg_sched_u_pow),
                       cwn_enable=bool(cwn_enable), alpha_c=float(alpha_c), alpha_u=float(alpha_u),
-                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau)
+                      agc_enable=bool(agc_enable), agc_tau=float(agc_tau),
+                      nag_fb_enable=bool(use_nag), nag_fb_scale=float(nag_scale), nag_fb_tau=float(nag_tau), nag_fb_alpha=float(nag_alpha)
                   )
                 # check once more right before the loop starts
                 model_management.throw_exception_if_processing_interrupted()
@@ -2549,7 +2579,7 @@ class ComfyAdaptiveDetailEnhancer25:
                         try:
                             import os
                             models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models")
-                            img_preview = safe_decode(vae, current_latent)
+                            img_preview = safe_decode(vae, current_latent, to_fp32=bool(vae_decode_fp32))
                             # Set toggles for this iteration
                             globals()["_ONNX_DEBUG"] = bool(onnx_debug)
                             globals()["_ONNX_COUNT_DEBUG"] = True  # force counts ON for debugging session
@@ -2583,7 +2613,7 @@ class ComfyAdaptiveDetailEnhancer25:
                     # CF edge mask (from current image) and fusion (only when enabled)
                     if bool(seg_use_cf_edges):
                         try:
-                            img_prev2 = safe_decode(vae, current_latent)
+                            img_prev2 = safe_decode(vae, current_latent, to_fp32=bool(vae_decode_fp32))
                             em2 = _build_cf_edge_mask_from_step(img_prev2, str(preset_step))
                             if em2 is not None:
                                 if onnx_mask_last is None:
@@ -2680,7 +2710,7 @@ class ComfyAdaptiveDetailEnhancer25:
                     try:
                         do_local_refine = False  # disable local best-of-2 by default
                         if do_local_refine:
-                            img_roi = safe_decode(vae, current_latent)
+                            img_roi = safe_decode(vae, current_latent, to_fp32=bool(vae_decode_fp32))
                             roi = _clipseg_build_mask(img_roi, "hand | hands | face", preview=max(192, int(clipseg_preview//2)), threshold=0.40, blur=5.0, dilate=2, gain=1.0)
                             if roi is None and onnx_mask_last is not None:
                                 roi = torch.clamp(onnx_mask_last, 0.0, 1.0)
@@ -2710,13 +2740,13 @@ class ComfyAdaptiveDetailEnhancer25:
                                 lat_a, = nodes.common_ksampler(
                                     sampler_model, s1, micro_steps, current_cfg, sampler_name, scheduler,
                                     positive, negative, lat_in_a, denoise=micro_denoise)
-                                img_a = safe_decode(vae, lat_a)
+                                img_a = safe_decode(vae, lat_a, to_fp32=bool(vae_decode_fp32))
                                 # Candidate B
                                 lat_in_b = {"samples": current_latent["samples"].clone()}
                                 lat_b, = nodes.common_ksampler(
                                     sampler_model, s2, micro_steps, current_cfg, sampler_name, scheduler,
                                     positive, negative, lat_in_b, denoise=micro_denoise)
-                                img_b = safe_decode(vae, lat_b)
+                                img_b = safe_decode(vae, lat_b, to_fp32=bool(vae_decode_fp32))
 
                                 # Score inside ROI
                                 def _roi_stats(img, roi_mask):
@@ -2962,7 +2992,7 @@ class ComfyAdaptiveDetailEnhancer25:
                     except Exception:
                         pass
 
-                    image = safe_decode(vae, current_latent)
+                    image = safe_decode(vae, current_latent, to_fp32=bool(vae_decode_fp32))
                     # and again after decode before post-processing
                     model_management.throw_exception_if_processing_interrupted()
 
@@ -3459,7 +3489,7 @@ def _smart_seed_select(model,
                     model, int(sd), int(probe_steps), float(cfg), str(sampler_name), str(scheduler),
                     positive, negative, lat_in, denoise=float(min(denoise, 0.65))
                 )
-                img = safe_decode(vae, lat_out)
+                img = safe_decode(vae, lat_out, to_fp32=bool(vae_decode_fp32))
                 # and again right after decode
                 model_management.throw_exception_if_processing_interrupted()
                 # Base score: edge density toward a target + low speckle + balanced exposure
@@ -3598,3 +3628,4 @@ def _interruptible_ksampler(model, seed, steps, cfg, sampler_name, scheduler,
     out = {**latent}
     out["samples"] = samples
     return (out,)
+
