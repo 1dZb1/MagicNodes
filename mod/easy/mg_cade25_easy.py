@@ -2183,6 +2183,9 @@ class ComfyAdaptiveDetailEnhancer25:
         iterations = int(pv("iterations", iterations))
         # Smart-seed per-step toggle (defaults to True if not present in preset)
         smart_seed_enable = bool(pv("smart_seed_enable", True))
+        smart_seed_k = int(pv("smart_seed_k", 3))
+        smart_seed_steps = int(pv("smart_seed_steps", 3))
+        smart_seed_diversity = float(pv("smart_seed_diversity", 0.0))
         steps_delta = float(pv("steps_delta", steps_delta))
         cfg_delta = float(pv("cfg_delta", cfg_delta))
         denoise_delta = float(pv("denoise_delta", denoise_delta))
@@ -2338,9 +2341,9 @@ class ComfyAdaptiveDetailEnhancer25:
                     model, vae, positive, negative, current_latent,
                     str(sampler_name), str(scheduler), float(current_cfg), float(current_denoise),
                     base_seed=0, step_tag=step_tag,
-                    # Reduce candidate count and probe cost for Easy UI
-                    k=3, probe_steps=3,
-                    clip_vision=clip_vision, reference_image=reference_image, clipseg_text=str(clipseg_text))
+                    k=int(max(1, smart_seed_k)), probe_steps=int(max(1, smart_seed_steps)),
+                    clip_vision=clip_vision, reference_image=reference_image, clipseg_text=str(clipseg_text),
+                    diversity=float(max(0.0, smart_seed_diversity)))
         except Exception as e:
             # propagate user cancel; swallow only non-interrupt errors
             if isinstance(e, model_management.InterruptProcessingException):
@@ -3436,7 +3439,8 @@ def _smart_seed_select(model,
                        clip_vision=None,
                        reference_image=None,
                        clipseg_text: str = "",
-                       step_tag: str | None = None) -> int:
+                       step_tag: str | None = None,
+                       diversity: float = 0.0) -> int:
     # Log start of SmartSeed selection
     try:
         # cooperative cancel before any smart-seed work
@@ -3446,9 +3450,9 @@ def _smart_seed_select(model,
             print("")
             print("")
             if step_tag:
-                print(f"\x1b[34m==== {step_tag}, Smart_seed_random: Start ====\x1b[0m")
+                print(f"\x1b[34m==== {step_tag}, Smart_seed_random: Start (k={int(k)}, steps={int(probe_steps)}, div={float(diversity):.2f}) ====\x1b[0m")
             else:
-                print("\x1b[34m==== Smart_seed_random: Start ====\x1b[0m")
+                print(f"\x1b[34m==== Smart_seed_random: Start (k={int(k)}, steps={int(probe_steps)}, div={float(diversity):.2f}) ====\x1b[0m")
         except Exception:
             pass
 
@@ -3498,6 +3502,13 @@ def _smart_seed_select(model,
                 lum = float(img.mean().item())
                 edge_target = 0.10
                 score = -abs(ed - edge_target) - 2.0 * speck - 0.5 * abs(lum - 0.5)
+                # Deterministic jitter to avoid tie clusters (scaled by diversity)
+                if float(diversity) > 0.0:
+                    try:
+                        rnd = (_splitmix64(int(sd) ^ int(anchor)) & 0xFFFFFFFF) / 4294967296.0
+                        score += (rnd - 0.5) * float(diversity)
+                    except Exception:
+                        pass
 
                 # Perceptual metrics: luminance std and Laplacian variance (downscaled)
                 try:

@@ -308,19 +308,16 @@ class MagicNodesCombiNode:
         lora_stack = []  # list of (lora_file, sc, sm)
         defer_clip = bool(standard_pipeline)
         for use_lora, lora_name, sm, sc in loras:
-            # Skip when disabled or name empty
-            if not use_lora or not lora_name:
+            # Strict gating: ignore slot when toggle is off OR name is None/empty/"None"
+            name = str(lora_name).strip() if lora_name is not None else ""
+            if (not bool(use_lora)) or (name == "") or (name.lower() in ("none", "null", "off")):
                 continue
-            # Resolve path safely (do not raise if missing)
+            # Resolve path safely (do not raise if missing). Missing behaves like disabled.
             try:
-                lora_path = folder_paths.get_full_path("loras", lora_name)
+                lora_path = folder_paths.get_full_path("loras", name)
             except Exception:
                 lora_path = None
-            if not lora_path or not os.path.exists(lora_path):
-                try:
-                    print(f"[CombiNode] LoRA '{lora_name}' not found; skipping.")
-                except Exception:
-                    pass
+            if (not lora_path) or (not os.path.exists(lora_path)):
                 continue
             active_lora_paths.append(lora_path)
             # keep lora object to avoid reloading
