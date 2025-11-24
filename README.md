@@ -93,6 +93,8 @@ You can save this workflow to ComfyUI `ComfyUI\user\default\workflows`
 
 I strongly recommend use `mg_Easy-Workflow` workflow + default settings + your model and my negative LoRA `mg_7lambda_negative.safetensors`, for best result.
 
+Also, I recomend try `mg_i2i_Easy-Workflow` workflow for remastering your images.
+
 
 ## 🚀 "One-Node" Quickstart (MG_SuperSimple)
 Start with `MG_SuperSimple` for the easiest path:
@@ -201,7 +203,8 @@ MagicNodes/
 │ 
 ├─ workflows/ 
 │  ├─ mg_SuperSimple-Workflow.json
-│  └─ mg_Easy-Workflow.json           
+│  ├─ mg_Easy-Workflow.json  
+│  └─ mg_i2i_Easy-Workflow.json        
 |  
 └─ requirements.txt
 ```
