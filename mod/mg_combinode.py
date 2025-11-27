@@ -275,13 +275,30 @@ class MagicNodesCombiNode:
         pos_text_expanded = _norm_prompt(_expand_dynamic(positive_prompt, int(dyn_seed), bool(dynamic_break_freeze)) if bool(dynamic_pos) else positive_prompt)
         neg_text_expanded = _norm_prompt(_expand_dynamic(negative_prompt, int(dyn_seed), bool(dynamic_break_freeze)) if bool(dynamic_neg) else negative_prompt)
 
+        def _valid_vae(v):
+            try:
+                return (v is not None) and (getattr(v, "first_stage_model", None) is not None)
+            except Exception:
+                return False
+
         if use_checkpoint and checkpoint:
             checkpoint_path = folder_paths.get_full_path_or_raise("checkpoints", checkpoint)
             _unload_old_checkpoint(checkpoint_path)
             base_model, base_clip, vae = _load_checkpoint(checkpoint_path)
             model = base_model.clone()
-            clip = base_clip.clone()
-            clip_clean = base_clip.clone()  # keep pristine CLIP for standard pipeline path
+            # Some flow/DiT style checkpoints (e.g., Z_image) ship without CLIP/VAE.
+            clip_source = base_clip or clip_in
+            if clip_source is None:
+                raise Exception("Checkpoint has no CLIP. Connect a CLIP input node or use a checkpoint that bundles CLIP.")
+            clip = clip_source.clone()
+            clip_clean = clip_source.clone()  # keep pristine CLIP for standard pipeline path
+            # Prefer external VAE when provided; some FLOW/DiT checkpoints return an invalid stub VAE.
+            for candidate in (vae_in, vae):
+                if _valid_vae(candidate):
+                    vae = candidate
+                    break
+            else:
+                raise Exception("Checkpoint has no valid VAE. Connect a VAE input node or use a checkpoint that bundles VAE.")
 
         elif model_in and clip_in:
             _unload_old_checkpoint(None)
@@ -289,6 +306,8 @@ class MagicNodesCombiNode:
             clip = clip_in.clone()
             clip_clean = clip_in.clone()
             vae = vae_in
+            if not _valid_vae(vae):
+                raise Exception("VAE input is missing or invalid. Please connect a proper VAE node.")
         else:
             raise Exception("No model selected!")
 

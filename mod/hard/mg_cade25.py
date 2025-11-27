@@ -11,6 +11,7 @@ import torch
 import os
 import numpy as np
 import torch.nn.functional as F
+import traceback
 
 import nodes
 import comfy.model_management as model_management

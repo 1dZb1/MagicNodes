@@ -7,6 +7,7 @@ import torch
 import os
 import numpy as np
 import torch.nn.functional as F
+import traceback
 
 import nodes
 import comfy.model_management as model_management
@@ -1113,6 +1114,133 @@ def safe_decode(vae, lat, tile=512, ovlp=128, to_fp32: bool = False):
         return out_cpu
     except Exception:
         return out
+
+
+def _match_latent_channels(vae, latent: dict, model=None):
+    """Align latent channel count to model/VAE expectations (e.g., FLUX/Z_image 16ch) with variance preservation."""
+    if not isinstance(latent, dict) or ("samples" not in latent):
+        return latent
+    z = latent.get("samples", None)
+    if z is None:
+        return latent
+    try:
+        target_c = None
+        # Prefer model latent_format if available (more reliable than VAE decoder)
+        if model is not None:
+            try:
+                lf = model.get_model_object("latent_format")
+                target_c = int(getattr(lf, "latent_channels", None) or 0) or None
+            except Exception:
+                target_c = None
+        fs = getattr(vae, "first_stage_model", None)
+        dec = getattr(fs, "decoder", None)
+        if dec is not None and hasattr(dec, "conv_in"):
+            target_c = target_c or int(dec.conv_in.in_channels)
+        if target_c is None and hasattr(fs, "latent_channels"):
+            target_c = int(getattr(fs, "latent_channels"))
+        if target_c is None and hasattr(vae, "latent_channels"):
+            target_c = int(getattr(vae, "latent_channels"))
+        if target_c is None:
+            return latent
+        cur_c = int(z.shape[1])
+        if cur_c == target_c:
+            return latent
+        # Repeat channels when divisible (common case: 4 -> 16)
+        if target_c % cur_c == 0 and cur_c > 0:
+            rep = target_c // cur_c
+            reps = [1, rep] + [1] * (z.ndim - 2)
+            z_fixed = z.repeat(*reps)
+            # Preserve variance after channel replication
+            z_fixed = z_fixed / (rep ** 0.5)
+        else:
+            # Fallback: pad zeros or slice to match
+            if target_c > cur_c:
+                pad = target_c - cur_c
+                pad_tensor = torch.zeros_like(z[:, :1, ...]).repeat(1, pad, *([1] * (z.ndim - 2)))
+                z_fixed = torch.cat([z, pad_tensor], dim=1)
+            else:
+                z_fixed = z[:, :target_c, ...]
+        latent = {**latent, "samples": z_fixed}
+    except Exception:
+        pass
+    return latent
+
+
+def _harmonize_cond_tokens(cond_list):
+    """Pad/truncate cond tokens + masks to a common length to avoid mismatches (e.g., 499 vs 528 or 981 vs 1286)."""
+    if not isinstance(cond_list, list):
+        return cond_list
+    # pass 1: find max token length across cross_attn
+    max_len = 0
+    for c in cond_list:
+        if isinstance(c, dict):
+            ca = c.get("cross_attn", None)
+            if ca is not None:
+                try:
+                    max_len = max(max_len, int(ca.shape[1]))
+                except Exception:
+                    pass
+    if max_len <= 0:
+        return cond_list
+    fixed = []
+    for c in cond_list:
+        if not isinstance(c, dict):
+            fixed.append(c)
+            continue
+        d = c.copy()
+        ca = d.get("cross_attn", None)
+        am = d.get("attention_mask", None)
+        # Harmonize cross_attn length
+        if ca is not None:
+            try:
+                ca_len = int(ca.shape[1])
+                if ca_len < max_len:
+                    pad_shape = list(ca.shape)
+                    pad_shape[1] = max_len - ca_len
+                    ca_pad = torch.zeros(pad_shape, device=ca.device, dtype=ca.dtype)
+                    ca = torch.cat([ca, ca_pad], dim=1)
+                elif ca_len > max_len:
+                    ca = ca[:, :max_len, ...]
+                d["cross_attn"] = ca
+            except Exception:
+                pass
+        # Harmonize mask length to cross_attn length
+        if ca is not None:
+            ca_len = int(ca.shape[1])
+            if am is None:
+                am = torch.ones((ca.shape[0], ca_len), device=ca.device, dtype=ca.dtype)
+            try:
+                am_len = int(am.shape[-1] if am.dim() == 2 else am.shape[1])
+                if am_len < ca_len:
+                    pad = ca_len - am_len
+                    pad_shape = list(am.shape)
+                    pad_shape[-1] = pad
+                    pad_tensor = torch.zeros(pad_shape, device=am.device, dtype=am.dtype)
+                    am = torch.cat([am, pad_tensor], dim=-1)
+                elif am_len > ca_len:
+                    am = am[..., :ca_len]
+                d["attention_mask"] = am
+                try:
+                    d["num_tokens"] = int(torch.count_nonzero(am, dim=-1).max().item())
+                except Exception:
+                    d["num_tokens"] = ca_len
+            except Exception:
+                pass
+        fixed.append(d)
+    return fixed
+
+
+def _summarize_conds(label, conds):
+    out = []
+    if isinstance(conds, list):
+        for idx, c in enumerate(conds):
+            try:
+                ca = c.get("cross_attn", None) if isinstance(c, dict) else None
+                am = c.get("attention_mask", None) if isinstance(c, dict) else None
+                out.append(f"{label}[{idx}]: ca={None if ca is None else list(ca.shape)}, am={None if am is None else list(am.shape)}")
+            except Exception:
+                pass
+    return "; ".join(out)
 
 
 def safe_encode(vae, img, tile=512, ovlp=64):
@@ -2309,6 +2437,13 @@ class ComfyAdaptiveDetailEnhancer25:
         except Exception:
             pass
 
+        # Align latent channels to VAE/model (e.g., Z_image/FLUX use 16ch latents)
+        latent = _match_latent_channels(vae, latent, model)
+
+        # Harmonize cond token lengths to prevent rare MGHybrid size mismatches
+        positive = _harmonize_cond_tokens(positive)
+        negative = _harmonize_cond_tokens(negative)
+
         image = safe_decode(vae, latent, to_fp32=bool(vae_decode_fp32))
         # allow user cancel right after initial decode
         model_management.throw_exception_if_processing_interrupted()
@@ -2830,6 +2965,7 @@ class ComfyAdaptiveDetailEnhancer25:
                             )
                             # Prepare latent + noise like in MG_ZeSmartSampler
                             lat_img = current_latent["samples"]
+                            lat_img = _match_latent_channels(vae, {"samples": lat_img}, sampler_model)["samples"]
                             lat_img = _sample.fix_empty_latent_channels(sampler_model, lat_img)
                             batch_inds = current_latent.get("batch_index", None)
                             noise = _sample.prepare_noise(lat_img, int(iter_seed), batch_inds)
@@ -2848,6 +2984,16 @@ class ComfyAdaptiveDetailEnhancer25:
                             current_latent = {**current_latent}
                             current_latent["samples"] = samples
                         except Exception as e:
+                            try:
+                                print(f"[CADE2.5][MGHybrid][debug] sigmas={list(sigmas.shape)} lat={list(current_latent['samples'].shape)}")
+                                print(_summarize_conds("pos", positive))
+                                print(_summarize_conds("neg", negative))
+                            except Exception:
+                                pass
+                            try:
+                                traceback.print_exc()
+                            except Exception:
+                                pass
                             # Before any fallback, propagate user cancel if set
                             try:
                                 model_management.throw_exception_if_processing_interrupted()

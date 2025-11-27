@@ -33,7 +33,15 @@ def _build_hybrid_sigmas(model, steps: int, base_sampler: str, mode: str,
     sig_k = _samplers.calculate_sigmas(ms, "karras", steps)
     sig_b = _samplers.calculate_sigmas(ms, "beta",   steps)
 
+    def _align_len(a: torch.Tensor, b: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Align two sigma schedules to the same length (use tail of longer)."""
+        if a.shape[0] == b.shape[0]:
+            return a, b
+        m = min(a.shape[0], b.shape[0])
+        return a[-m:], b[-m:]
+
     mode = str(mode).lower()
+    sig_k, sig_b = _align_len(sig_k, sig_b)
     if mode == "karras":
         sig = sig_k
     elif mode == "beta":
@@ -54,6 +62,7 @@ def _build_hybrid_sigmas(model, steps: int, base_sampler: str, mode: str,
         new_steps = max(1, int(steps / max(1e-6, float(denoise))))
         sk = _samplers.calculate_sigmas(ms, "karras", new_steps)
         sb = _samplers.calculate_sigmas(ms, "beta",   new_steps)
+        sk, sb = _align_len(sk, sb)
         if mode == "karras":
             sig_full = sk
         elif mode == "beta":
