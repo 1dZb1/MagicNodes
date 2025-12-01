@@ -83,12 +83,14 @@ Next:
 1. Clone or download this repo into `ComfyUI/custom_nodes/`
 2. Install helpers: `pip install -r requirements.txt`
 3. I recomend, take my negative LoRA `mg_7lambda_negative.safetensors` in HF https://huggingface.co/DD32/mg_7lambda_negative/blob/main/mg_7lambda_negative.safetensors and place the file in ComfyUI, to `ComfyUI/models/loras`
-4. If you have `custom_nodes\comfyui_controlnet_aux\` installed and there is a depth model, then it is usually "picked up" automatically, if not, then, download model `depth_anything_v2_vitl.pth` https://huggingface.co/depth-anything/Depth-Anything-V2-Large/tree/main and place inside in to `depth-anything/` folder.
-5. Workflows
+4. If you have `custom_nodes/comfyui_controlnet_aux/` installed and there is a depth model, then it is usually "picked up" automatically, if not, then, download model `depth_anything_v2_vitl.pth` https://huggingface.co/depth-anything/Depth-Anything-V2-Large/tree/main and place inside in to `depth-anything/` folder.
+5. Download https://huggingface.co/lllyasviel/sd_control_collection/tree/main `diffusers_xl_depth_full.safetensors` and place into `ComfyUI/models/controlnet`
+6. Download a CLIP Vision model and place it under `ComfyUI/models/clip_vision` (e.g., https://huggingface.co/openai/clip-vit-large-patch14; heavy alternative: https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K). SuperSimple/CADE will use it for reference-based polish.
+7. Workflows
 Folder `workflows/` contains ready-to-use graphs:
 - `mg_SuperSimple-Workflow.json` — one-node pipeline (2/3/4 steps) with presets
 - `mg_Easy-Workflow.json` — the same logic built from individual Easy nodes.
-You can save this workflow to ComfyUI `ComfyUI\user\default\workflows`
+You can save this workflow to ComfyUI `ComfyUI/user/default/workflows`
 6. Restart ComfyUI. Nodes appear under the "MagicNodes" categories.
 
 I strongly recommend use `mg_Easy-Workflow` workflow + default settings + your model and my negative LoRA `mg_7lambda_negative.safetensors`, for best result.
@@ -117,35 +119,33 @@ Notes:
 
 1) Recommended negative LoRA: `mg_7lambda_negative.safetensors` with `strength_model = -1.0`, `strength_clip = 0.2`. Place LoRA files under `ComfyUI/models/loras` so they appear in the LoRA selector.
 
-2) Download a CLIP Vision model and place it under `ComfyUI/models/clip_vision` (e.g., https://huggingface.co/openai/clip-vit-large-patch14; heavy alternative: https://huggingface.co/laion/CLIP-ViT-H-14-laion2B-s32B-b79K). SuperSimple/CADE will use it for reference-based polish.
+2) Samplers: i recomend use `ddim` for many cases (Draw and Realism style). Scheduler: use `MGHybrid` in this pipeline.
 
-3) Samplers: i recomend use `ddim` for many cases (Draw and Realism style). Scheduler: use `MGHybrid` in this pipeline.
+3) Denoise: higher -> more expressive and vivid; you can go up to 1.0. The same applies to CFG: higher -> more expressive but may introduce artifacts. Suggested CFG range: ~4.5–8.5.
 
-4) Denoise: higher -> more expressive and vivid; you can go up to 1.0. The same applies to CFG: higher -> more expressive but may introduce artifacts. Suggested CFG range: ~4.5–8.5.
+4) If you see unwanted artifacts on the final (4th) step, slightly lower denoise to ~0.5–0.6 or simply change the seed.
 
-5) If you see unwanted artifacts on the final (4th) step, slightly lower denoise to ~0.5–0.6 or simply change the seed.
+5) You can get interesting results by repeating steps (in Easy/Hard workflows), e.g., `1 -> 2 -> 3 -> 3`.  Just experiment with it!
 
-6) You can get interesting results by repeating steps (in Easy/Hard workflows), e.g., `1 -> 2 -> 3 -> 3`.  Just experiment with it!
+6) Recommended starting latent close to ~672x944 (other aspect ratios are fine). With that, step 4 produces ~3688x5192. Larger starting sizes are OK if the model and your hardware allow.
 
-7) Recommended starting latent close to ~672x944 (other aspect ratios are fine). With that, step 4 produces ~3688x5192. Larger starting sizes are OK if the model and your hardware allow.
+7) Unlucky seeds happen — just try another. (We may later add stabilization to this process.)
 
-8) Unlucky seeds happen — just try another. (We may later add stabilization to this process.)
+8) Rarely, step 3 can show a strange grid artifact (in both Easy and Hard workflows). If this happens, try changing CFG or seed. Root cause still under investigation.
 
-9) Rarely, step 3 can show a strange grid artifact (in both Easy and Hard workflows). If this happens, try changing CFG or seed. Root cause still under investigation.
+9) Results depend on checkpoint/LoRA quality. The pipeline “squeezes” everything SDXL and your model can deliver, so prefer high‑quality checkpoints and non‑overtrained LoRAs.
 
-10) Results depend on checkpoint/LoRA quality. The pipeline “squeezes” everything SDXL and your model can deliver, so prefer high‑quality checkpoints and non‑overtrained LoRAs.
+10) Avoid using more than 3 LoRAs at once, and keep only one “lead” LoRA (one you trust is not overtrained). Too many/strong LoRAs can spoil results.
 
-11) Avoid using more than 3 LoRAs at once, and keep only one “lead” LoRA (one you trust is not overtrained). Too many/strong LoRAs can spoil results.
+11) Try connecting reference images in either workflow — you can get unusual and interesting outcomes.
 
-12) Try connecting reference images in either workflow — you can get unusual and interesting outcomes.
+12) Very often, the image in `step 3 is of very good quality`, but it usually lacks sharpness. But if you have a `weak system`, you can `limit yourself to 3 steps`.
 
-13) Very often, the image in `step 3 is of very good quality`, but it usually lacks sharpness. But if you have a `weak system`, you can `limit yourself to 3 steps`.
+13) SmartSeed (auto seed pick): set `seed = 0` in Easy or SuperSimple. The node will sample several candidate seeds and do a quick low‑step probe to choose a balanced one. You’ll see logs `Smart_seed_random: Start` and `Smart_seed_random: End. Seed is: <number>`. Use any non‑zero seed for fully deterministic runs.
 
-14) SmartSeed (auto seed pick): set `seed = 0` in Easy or SuperSimple. The node will sample several candidate seeds and do a quick low‑step probe to choose a balanced one. You’ll see logs `Smart_seed_random: Start` and `Smart_seed_random: End. Seed is: <number>`. Use any non‑zero seed for fully deterministic runs.
+14) The 4th step sometimes saves the image for a long time, just wait for the end of the process, it depends on the initial resolution you set.
 
-15) The 4th step sometimes saves the image for a long time, just wait for the end of the process, it depends on the initial resolution you set.
-
-16) The `CombiNode` node is optional, you can replace it with standard ComfyUI pipelines.
+15) The `CombiNode` node is optional, you can replace it with standard ComfyUI pipelines.
 
 <br></br>
 <details>
