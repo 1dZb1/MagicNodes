@@ -440,6 +440,16 @@ def _kj_crossattn_forward_nag(self, x, context=None, value=None, mask=None, **kw
         if context is None or not torch.is_tensor(context):
             return _call_orig_crossattn(self, x, context=context, value=value, mask=mask, **kwargs)
 
+        # Sanity: skip NAG when context dim doesn't match this layer's expected key dim
+        try:
+            exp = getattr(self, "to_k", None)
+            exp_dim = int(exp.in_features) if exp is not None else None
+        except Exception:
+            exp_dim = None
+        if (exp_dim is not None) and (int(context.shape[-1]) != exp_dim):
+            # Mismatched CLIP/context (e.g., SDXL context 2048 on SD1 ControlNet 768); avoid matmul crash
+            return _call_orig_crossattn(self, x, context=context, value=value, mask=mask, **kwargs)
+
         # Expect batch 2 with [uncond, cond]; if not, fall back
         if context.shape[0] < 2:
             return _call_orig_crossattn(self, x, context=context, value=value, mask=mask, **kwargs)
