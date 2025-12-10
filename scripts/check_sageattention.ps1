@@ -266,6 +266,12 @@ if(-not $wantSA3 -and -not $wheelOk){
   $arch = ''
   if($ti.is_cuda -and $ti.cc){ $arch = $ti.cc }
   if($arch){ $env:TORCH_CUDA_ARCH_LIST = $arch }
+  # On Windows, hint distutils to reuse existing SDK (helps cl detection in plain shells)
+  if($isWindows){
+    $env:DISTUTILS_USE_SDK = "1"
+    $env:MSSdk = "1"
+    Write-Host "Using existing MSVC build tools (DISTUTILS_USE_SDK=1, MSSdk=1)" -ForegroundColor DarkCyan
+  }
   # Ensure toolchain
   Write-Section "Toolchain check"
   $hasCL = ($null -ne (Get-Command cl.exe -ErrorAction SilentlyContinue))
@@ -307,6 +313,11 @@ if($wantSA3 -and -not $sa3present){
   if(-not $wheelOk){
     Write-Section "Building SA2 from source"
     $null = Invoke-Quiet $py.path "-m pip install -U packaging cmake ninja" "toolchain python deps"
+    if($isWindows){
+      $env:DISTUTILS_USE_SDK = "1"
+      $env:MSSdk = "1"
+      Write-Host "Using existing MSVC build tools (DISTUTILS_USE_SDK=1, MSSdk=1)" -ForegroundColor DarkCyan
+    }
     $built = $false
     $urls = @(
       'https://github.com/thu-ml/SageAttention/archive/refs/heads/main.zip',
