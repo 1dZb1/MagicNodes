@@ -40,13 +40,14 @@ Behavior
 - ControlFusion inside this node always relies on presets (no additional CF UI here) to keep the surface minimal.
 
 Outputs
-- `(LATENT, IMAGE)` from the final executed step (e.g., step 2 if `step_count=2`). No preview outputs.
+- `(LATENT, IMAGE, selected_seed)` from the final executed step (e.g., step 2 if `step_count=2`). No preview outputs.
+- `selected_seed` is the seed CADE actually used after SmartSeed selection. With a non-zero fixed seed, it matches the requested seed.
 
 Quickstart
 1) Drop `MG_SuperSimple` into your graph under `MagicNodes/Easy`.
 2) Connect `model/positive/negative/vae/latent`, and a `control_net` module; optionally connect `reference_image` and `clip_vision`.
 3) Choose `step_count` (2/3/4). Leave `custom` Off to use pure presets, or enable it to apply your `seed/steps/cfg/denoise/sampler/scheduler/clipseg_text` across all steps (with Step 1 `denoise=1.0`).
-4) Run. The node returns the final `(LATENT, IMAGE)` for the chosen depth.
+4) Run. The node returns the final `(LATENT, IMAGE, selected_seed)` for the chosen depth.
 
 Notes
 - Presets are read from `pressets/mg_cade25.cfg` and `pressets/mg_controlfusion.cfg`. Keep them in UTF‑8 and prefer `$(ROOT)` over absolute paths.

@@ -56,7 +56,7 @@ Photo Dog
 - MGHybrid scheduler: hybrid Karras/Beta sigma stack with smooth tail blending and tiny schedule jitter (ZeSmart-inspired) for more stable, detail-friendly denoising; used by CADE and SuperSimple by default
 - Seed Latent (MG_SeedLatent): fast, deterministic latent initializer aligned to VAE stride; supports pure-noise starts or image-mixed starts (encode + noise) to gently bias content; batch-ready and resolution-agnostic, pairs well with SuperSimple recommended latent sizes for reproducible pipelines
 - Muse Blend and Polish: directional post-mix and final low-frequency-preserving clean-up
-- SmartSeed (CADE Easy and SuperSimple): set `seed = 0` to auto-pick a good seed from a tiny low-step probe. Uses a low-discrepancy sweep, avoids speckles/overexposure, and, if available, leverages CLIP-Vision (with `reference_image`) and CLIPSeg focus text to favor semantically aligned candidates. Logs `Smart_seed_random: Start/End`. 
+- SmartSeed (CADE Easy and SuperSimple): set `seed = 0` to auto-pick a good seed from a tiny low-step probe. Uses a low-discrepancy sweep, avoids speckles/overexposure, and, if available, leverages CLIP-Vision (with `reference_image`) and CLIPSeg focus text to favor semantically aligned candidates. Logs `Smart_seed_random: Start/End` and exposes the final choice on the `selected_seed` output.
 <b>I highly recommend working with SmartSeed.</b>
 - CADE2.5 pipeline does not just upscale the image, it iterates and adds small details, doing it carefully, at every stage.
 
@@ -141,7 +141,7 @@ Notes:
 
 12) Very often, the image in `step 3 is of very good quality`, but it usually lacks sharpness. But if you have a `weak system`, you can `limit yourself to 3 steps`.
 
-13) SmartSeed (auto seed pick): set `seed = 0` in Easy or SuperSimple. The node will sample several candidate seeds and do a quick low‑step probe to choose a balanced one. You’ll see logs `Smart_seed_random: Start` and `Smart_seed_random: End. Seed is: <number>`. Use any non‑zero seed for fully deterministic runs.
+13) SmartSeed (auto seed pick): set `seed = 0` in Easy or SuperSimple. The node will sample several candidate seeds and do a quick low‑step probe to choose a balanced one. You’ll see logs `Smart_seed_random: Start` and `Smart_seed_random: End. Seed is: <number>`, and the chosen value is available from the `selected_seed` output. Use any non‑zero seed for fully deterministic runs.
 
 14) The 4th step sometimes saves the image for a long time, just wait for the end of the process, it depends on the initial resolution you set.
 
@@ -222,6 +222,7 @@ MagicNodes/
 
 ## CADE 2.5 (mg_cade25.py, mg_cade25_easy.py)
 - Deterministic preflight: CLIPSeg pinned to CPU; preview mask reset; noise tied to `iter_seed`
+- CADE Easy appends a `selected_seed` INT output after `mask_preview`; existing LATENT, IMAGE, and mask slots keep their order.
 - Encode/Decode: stride-aligned, with larger overlap for >2K to avoid artifacts
 - Polish mode (final hi-res refinement):
   - `polish_enable`, `polish_keep_low` (global form from reference), `polish_edge_lock`, `polish_sigma`

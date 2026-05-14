@@ -2260,8 +2260,8 @@ class ComfyAdaptiveDetailEnhancer25:
             },
         }
 
-    RETURN_TYPES = ("LATENT", "IMAGE", "INT", "FLOAT", "FLOAT", "IMAGE")
-    RETURN_NAMES = ("LATENT", "IMAGE", "steps", "cfg", "denoise", "mask_preview")
+    RETURN_TYPES = ("LATENT", "IMAGE", "INT", "FLOAT", "FLOAT", "IMAGE", "INT")
+    RETURN_NAMES = ("LATENT", "IMAGE", "steps", "cfg", "denoise", "mask_preview", "selected_seed")
     FUNCTION = "apply_cade2"
     CATEGORY = "MagicNodes"
 
@@ -3428,7 +3428,7 @@ class ComfyAdaptiveDetailEnhancer25:
         except Exception:
             pass
 
-        return current_latent, image, int(current_steps), float(current_cfg), float(current_denoise), onnx_mask_img
+        return current_latent, image, int(current_steps), float(current_cfg), float(current_denoise), onnx_mask_img, int(seed)
 
 
 # === Easy UI wrapper: show only top-level controls ===
@@ -3461,8 +3461,8 @@ class CADEEasyUI(ComfyAdaptiveDetailEnhancer25):
         }
 
     # Easy outputs (hide steps/cfg/denoise)
-    RETURN_TYPES = ("LATENT", "IMAGE", "IMAGE")
-    RETURN_NAMES = ("LATENT", "IMAGE", "mask_preview")
+    RETURN_TYPES = ("LATENT", "IMAGE", "IMAGE", "INT")
+    RETURN_NAMES = ("LATENT", "IMAGE", "mask_preview", "selected_seed")
     FUNCTION = "apply_easy"
 
     def apply_easy(self,
@@ -3470,7 +3470,7 @@ class CADEEasyUI(ComfyAdaptiveDetailEnhancer25):
                    model, positive, negative, vae, latent,
                    seed, steps, cfg, denoise, sampler_name, scheduler,
                    clipseg_text="", reference_image=None, clip_vision=None, custom=False):
-        lat, img, _s, _c, _d, mask = super().apply_cade2(
+        lat, img, _s, _c, _d, mask, selected_seed = super().apply_cade2(
             model, vae, positive, negative, latent,
             int(seed), int(steps), float(cfg), float(denoise),
             str(sampler_name), str(scheduler), 0.0,
@@ -3478,11 +3478,11 @@ class CADEEasyUI(ComfyAdaptiveDetailEnhancer25):
             reference_image=reference_image,
             clip_vision=clip_vision,
         )
-        return lat, img, mask
+        return lat, img, mask, selected_seed
 
         # Show simpler outputs in Easy variant
-        RETURN_TYPES = ("LATENT", "IMAGE", "IMAGE")
-        RETURN_NAMES = ("LATENT", "IMAGE", "mask_preview")
+        RETURN_TYPES = ("LATENT", "IMAGE", "IMAGE", "INT")
+        RETURN_NAMES = ("LATENT", "IMAGE", "mask_preview", "selected_seed")
         FUNCTION = "apply_easy"
 
         def apply_easy(self,
@@ -3490,13 +3490,13 @@ class CADEEasyUI(ComfyAdaptiveDetailEnhancer25):
                        model, positive, negative, vae, latent,
                        seed, steps, cfg, denoise, sampler_name, scheduler,
                        clipseg_text=""):
-            lat, img, _s, _c, _d, mask = super().apply_cade2(
+            lat, img, _s, _c, _d, mask, selected_seed = super().apply_cade2(
                 model, vae, positive, negative, latent,
                 int(seed), int(steps), float(cfg), float(denoise),
                 str(sampler_name), str(scheduler), 0.0,
                 preset_step=str(preset_step), custom_override=bool(custom), clipseg_text=str(clipseg_text),
             )
-            return lat, img, mask
+            return lat, img, mask, selected_seed
 
 
 

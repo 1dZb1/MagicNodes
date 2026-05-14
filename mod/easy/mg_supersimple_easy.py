@@ -13,7 +13,7 @@ control_net: ControlNet module for CF (required)
 reference_image/clip_vision: forwarded into CADE (optional)
 Outputs:
 
-(LATENT, IMAGE) from the final executed step
+(LATENT, IMAGE, selected_seed) from the final executed step
 """
 
 
@@ -62,8 +62,8 @@ class MG_SuperSimple:
             },
         }
 
-    RETURN_TYPES = ("LATENT", "IMAGE")
-    RETURN_NAMES = ("LATENT", "IMAGE")
+    RETURN_TYPES = ("LATENT", "IMAGE", "INT")
+    RETURN_NAMES = ("LATENT", "IMAGE", "selected_seed")
     FUNCTION = "run"
 
     def _cade(self,
@@ -75,7 +75,7 @@ class MG_SuperSimple:
               clipseg_text: str,
               reference_image=None, clip_vision=None):
         # CADE core call mirrors CADEEasyUI -> apply_cade2
-        lat, img, _s, _c, _d, _mask = _CADE().apply_cade2(
+        lat, img, _s, _c, _d, _mask, selected_seed = _CADE().apply_cade2(
             model, vae, positive, negative, latent,
             int(seed), int(steps), float(cfg), float(denoise),
             str(sampler_name), str(scheduler), 0.0,
@@ -83,7 +83,7 @@ class MG_SuperSimple:
             clipseg_text=str(clipseg_text),
             reference_image=reference_image, clip_vision=clip_vision,
         )
-        return lat, img
+        return lat, img, selected_seed
 
     def _cf(self,
             preset_step: str,
@@ -112,11 +112,12 @@ class MG_SuperSimple:
         cur_image = None
         cur_pos = positive
         cur_neg = negative
+        selected_seed = int(seed)
 
         try:
             # Step 1: CADE with Step 1 preset, denoise forced to 1.0
             denoise_step1 = 1.0
-            lat1, img1 = self._cade(
+            lat1, img1, selected_seed = self._cade(
                 preset_step="Step 1",
                 custom_override=bool(custom),
                 model=model, vae=vae, positive=cur_pos, negative=cur_neg, latent=cur_latent,
@@ -141,7 +142,7 @@ class MG_SuperSimple:
                 # If no external reference_image is provided, use the previous step image
                 # so that reference_clean / CLIP-Vision gating can take effect.
                 ref_img = reference_image if (reference_image is not None) else cur_image
-                lat_i, img_i = self._cade(
+                lat_i, img_i, selected_seed = self._cade(
                     preset_step=f"Step {i}",
                     custom_override=bool(custom),
                     model=model, vae=vae, positive=cur_pos, negative=cur_neg, latent=cur_latent,
@@ -151,7 +152,7 @@ class MG_SuperSimple:
                     reference_image=ref_img, clip_vision=clip_vision,
                 )
                 cur_latent, cur_image = lat_i, img_i
-            return (cur_latent, cur_image)
+            return (cur_latent, cur_image, selected_seed)
         finally:
             # try to free memory on cancel or normal exit
             try:
